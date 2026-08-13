@@ -35,4 +35,15 @@ func main() {
 	//变量名 := 表达式
 	e := "E"
 	fmt.Println(e)
+
+	//匿名变量-用户忽略函数返回的多个值中的值
+	//写法   _
+	//注：匿名变量不占用命名空间和内存，不存在重复生命的问题
+
+	var x, y, _ = getData()
+	fmt.Println(x, y)
+
+}
+func getData() (string, int, float64) {
+	return "张三", 10, 3.14
 }
