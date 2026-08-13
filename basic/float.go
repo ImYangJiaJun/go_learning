@@ -8,6 +8,9 @@ import (
 )
 
 func main() {
+
+	//float默认值为0
+
 	var x float64 = 3.141
 	var y float32 = 3.14123123123
 	fmt.Printf("x\t类型：%T\t值：%v\t|%f\t占用字节：%v\n", x, x, x, unsafe.Sizeof(x))
