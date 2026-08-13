@@ -40,4 +40,16 @@ func main() {
 	//使用第三方包解决
 	fmt.Println(decimal.NewFromFloat(m1).Sub(decimal.NewFromFloat(m2)))
 	fmt.Println(decimal.NewFromFloat(m3).Mul(decimal.NewFromInt(100)))
+	//Add加	Sub减 Mul乘 Div除
+
+	//int转换成float
+	a := 10
+	b := float64(a)
+	fmt.Printf("a的类型：%T\t\ta的值：%v\nb的类型：%T\tb的值：%v\n", a, a, b, b)
+
+	//float转换成int(不建议)
+	var c1 float32 = 23.45
+	c2 := int(c1)
+	fmt.Printf("c1的类型：%T\tc1的值：%v\nc2的类型：%T\t\tc2的值：%v", c1, c1, c2, c2)
+
 }
