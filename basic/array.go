@@ -36,4 +36,50 @@ func main() {
 		fmt.Printf("arr6[%d]=%v\n", k, v)
 	}
 
+	//数组以及其余基本类型是值类型
+	arr7 := arr5 //arr7会单独分配内存
+	fmt.Println("before:", "arr5:", arr5, "arr7", arr7)
+	arr5[0] = 11 //修改arr5不会影响arr7
+	fmt.Println("after:", "arr5:", arr5, "arr7", arr7)
+
+	//切片是引用类型
+	slice1 := []int{1, 2, 3} //[]内部不定义长度就是切片
+	slice2 := slice1         //不会分配新内存，指向同一份内存,修改其中一个会影响所有指向这个内存的变量
+	fmt.Println("before:", "slice1:", slice1, "slice2:", slice2)
+	slice1[0] = 11
+	fmt.Println("after:", "slice1:", slice1, "slice2:", slice2)
+	slice2[1] = 22
+	fmt.Println("after:", "slice1:", slice1, "slice2:", slice2)
+
+	//多维数组
+	var arrs1 = [3][2]string{
+		{"a", "b"},
+		{"c", "d"},
+		{"e", "f"},
+	}
+	fmt.Println("arrs1:", arrs1, "len:", len(arrs1), "arrs1[0]", arrs1[0], "len_in:", len(arrs1[0]), "arrs[0][0]:", arrs1[0][0])
+
+	println("--------------------------------------")
+
+	//循环遍历
+	for k1, v1 := range arrs1 {
+		for k2, v2 := range v1 {
+			fmt.Printf("arrs1[%d][%d]=%v\n", k1, k2, v2)
+		}
+	}
+	println("--------------------------------------")
+	for i := 0; i < len(arrs1); i++ {
+		for j := 0; j < len(arrs1[i]); j++ {
+			fmt.Printf("arrs1[%d][%d]=%v\n", i, j, arrs1[i][j])
+		}
+	}
+
+	println("--------------------------------------")
+	var arrs2 = [...][2]string{ //[...]只能用在外层
+		{"a", "b"},
+		{"c", "d"},
+		{"e", "f"},
+		{"g", "h"},
+	}
+	fmt.Println("arrs2:", arrs2, "len:", len(arrs2))
 }
