@@ -1,0 +1,427 @@
+# SortBench TDD —— 排序算法与 Benchmark 公平性
+
+目标：阶段 5 的收官练习。用 TDD 实现插入 / 归并 / 快排 / 堆四种经典排序，
+但注意力不只在算法本身——**一个用例表驱动多个实现的参数化测试**、
+**让 `sort.Ints` 当裁判的性质对照**、**benchmark 的公平性**（输入污染是最大的坑），
+最后顺带用两对迷你 benchmark 亲手验证 uber 性能条。
+
+> 本任务是**机制学习型**练习：接口契约已固定，不要花时间在 API 设计上。
+> 用法：第一节看需求；第二节边做边学——每个行为下面附有这一步要用到的知识点讲解；
+> 第三节是知识点总结，做完后对照自查。
+
+---
+
+## 一、需求规格
+
+### 这个包要做什么
+
+**没有 `main` 函数。** 本练习的产出物不是可执行程序，而是一个被测试验证的包——
+`go test ./tdd/sortbench` 就是它的运行方式，验收者是测试，不是人。
+
+这个包对外提供四个能力，签名统一便于对照：
+
+- **插入排序 / 归并排序 / 快速排序 / 堆排序**，全部**原地**排序：
+  直接修改传入的切片、按升序排列、无返回值
+- 空切片、nil 切片、单元素切片都必须安全通过（不崩溃、不修改）
+
+### 文件计划（共 3 个文件）
+
+| 文件 | 里面写什么 | 什么时候建 |
+|---|---|---|
+| `sort_test.go` | 行为 1~3 的全部测试（用例表 + 参数化 + 性质对照） | **第 1 个建** |
+| `sort.go` | `InsertionSort` / `MergeSort` / `QuickSort` / `HeapSort` | 测试编译报错时，逐个行为补 |
+| `bench_test.go` | 行为 4、5 的全部 benchmark | 行为 4 开始时 |
+
+### 接口契约（固定，按此实现，名字不要改）
+
+```go
+package sortbench
+
+// InsertionSort 原地插入排序：直接修改 a，按升序排列，无返回值。
+// len(a) < 2 时（含 nil 切片）直接返回，不做任何事。
+func InsertionSort(a []int)
+
+// MergeSort 原地归并排序：语义同上。
+// 内部允许申请临时切片做合并，但对调用方呈现的效果必须是"a 本身被排好序"。
+func MergeSort(a []int)
+
+// QuickSort 原地快速排序：语义同上。
+// 递归分治实现，partition 过程不允许申请新切片。
+func QuickSort(a []int)
+
+// HeapSort 原地堆排序：语义同上。
+// 不允许调用 sort 包——自己维护堆的下沉/上浮。
+func HeapSort(a []int)
+```
+
+四个函数签名完全一致不是巧合：它们将一起塞进**同一张用例表**（行为 2）和
+**同一个 benchmark 循环**（行为 4）——签名统一是参数化的前提。
+
+### 第一步：手把手起步（行为 1 的测试直接给你当模板）
+
+1. 在 `tdd/sortbench/` 下新建 `sort_test.go`，写入：
+
+```go
+package sortbench
+
+import (
+	"slices"
+	"testing"
+)
+
+func TestInsertionSort(t *testing.T) {
+	cases := []struct {
+		name  string
+		input []int
+		want  []int
+	}{
+		{name: "空切片", input: []int{}, want: []int{}},
+		{name: "单元素", input: []int{42}, want: []int{42}},
+		{name: "已序", input: []int{1, 2, 3, 4, 5}, want: []int{1, 2, 3, 4, 5}},
+		{name: "逆序", input: []int{5, 4, 3, 2, 1}, want: []int{1, 2, 3, 4, 5}},
+		{name: "含重复", input: []int{3, 1, 2, 3, 1, 2}, want: []int{1, 1, 2, 2, 3, 3}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			original := slices.Clone(c.input) // 原地排序会吃掉输入，先留一份用于报错
+			InsertionSort(c.input)
+			if !slices.Equal(c.input, c.want) {
+				t.Errorf("输入 %v，排序后得到 %v，期望 %v", original, c.input, c.want)
+			}
+		})
+	}
+}
+```
+
+2. 运行 `go test ./tdd/sortbench` → **编译失败**：`undefined: InsertionSort`。
+   这就是 RED —— 测试描述了你想要但还不存在的代码。
+3. 新建 `sort.go`，写**最少**的代码让测试通过：先写 `len(a) < 2` 的 guard
+   兜住空/单元素用例，再写双重循环的插入排序本体。
+4. 再跑 `go test ./tdd/sortbench -v` → 五个子测试全绿，行为 1 完成。
+
+---
+
+## 二、任务单（边做边学）
+
+每个行为 = 一轮完整的 RED → GREEN → REFACTOR，**先把测试写出来再实现**。
+
+### 行为 1：InsertionSort 表驱动（模板已在第一步给出）
+
+| 用例名 | 输入 | 断言 |
+|---|---|---|
+| 空切片 | `[]int{}` | 不 panic，结果为 `[]int{}` |
+| 单元素 | `[]int{42}` | `slices.Equal(got, []int{42})` |
+| 已序 | `[]int{1, 2, 3, 4, 5}` | 排序后保持不变 |
+| 逆序 | `[]int{5, 4, 3, 2, 1}` | `[]int{1, 2, 3, 4, 5}` |
+| 含重复 | `[]int{3, 1, 2, 3, 1, 2}` | `[]int{1, 1, 2, 2, 3, 3}`（重复元素不丢不多） |
+
+**这一步用到的知识点：**
+
+1. **切片不能用 `==` 比较**：`got == want` 直接编译失败（slice can only be compared to nil）。
+   [tdd/testbasic](../testbasic/README.md) 里比较的是 string，可以 `!=`；换成切片就要换工具——
+   `slices.Equal`（Go 1.21+，[basic/generic.go](../../basic/generic.go) 学过的泛型的实战）逐元素比较。
+   看元素差异用 `slices.Equal`，判 nil 用 `got == nil`，两者别混。
+2. **原地排序的断言姿势**：被测函数修改的是入参本身，所以断言语句读的 `c.input` 已经是
+   排序后的样子；想让失败信息里保留原始输入，必须在排序前 `slices.Clone` 留一份。
+   记住这种"输入被吃掉"的感觉——行为 4 的**输入污染**就是它的大号版本。
+3. **插入排序本身**：像整理手里的扑克牌——从左到右，把每张牌插入左边已排好的部分。
+   已序输入是最好情况 O(n)（内层循环一次都不进），逆序最坏 O(n²)。这就是用例表里
+   "已序"和"逆序"必须分开列的原因：它们走的是完全不同的代码路径。
+4. **guard 子句**：`if len(a) < 2 { return }` 一行兜住空切片、单元素和 nil 切片三种输入
+   （nil 切片 len 为 0，天然安全——"nil 是有效 slice"，uber 规范条目之一）。
+
+### 行为 2：MergeSort / QuickSort / HeapSort —— 一张用例表驱动四个实现
+
+先**重构测试**（此刻全绿，REFACTOR 的对象是测试代码）：把行为 1 的用例表抽出来，
+加一张"算法表"，双层 `t.Run` 组织成 `TestSorts/MergeSort/逆序` 这样的两层树：
+
+```go
+func TestSorts(t *testing.T) {
+	cases := []struct {
+		name  string
+		input []int
+		want  []int
+	}{
+		// 行为 1 的五行原样搬过来
+	}
+	algos := []struct {
+		name string
+		sort func([]int)
+	}{
+		{"InsertionSort", InsertionSort},
+		{"MergeSort", MergeSort}, // 编译失败 undefined: MergeSort → RED，去实现它
+		// 每完成一个算法，补一行：QuickSort、HeapSort
+	}
+	for _, algo := range algos {
+		for _, c := range cases {
+			t.Run(algo.name+"/"+c.name, func(t *testing.T) {
+				input := slices.Clone(c.input)
+				algo.sort(input)
+				if !slices.Equal(input, c.want) {
+					t.Errorf("%s(%v) = %v，期望 %v", algo.name, c.input, input, c.want)
+				}
+			})
+		}
+	}
+}
+```
+
+然后按 **加一行算法 → RED → 实现 → GREEN** 的节奏，逐个 TDD 出归并、快排、堆排。
+`TestInsertionSort` 可以删掉，它的用例已被 `TestSorts` 完全覆盖。
+
+**这一步用到的知识点：**
+
+1. **函数是一等公民**：`sort func([]int)` 是一个普通的结构体字段，四个统一签名的算法
+   （契约的用意在此兑现）都能放进去。测试逻辑只有一份，加算法 = 加一行——这是表驱动思想
+   从"数据参数化"到"行为参数化"的升级，等价于其他语言里的策略模式，但不需要任何接口定义。
+2. **为什么每个子测试必须 `slices.Clone(c.input)`**：用例表里的 `input` 切片字面量
+   在整个测试进程里**只有一份底层数组**。原地排序会把"逆序"那行排成升序，下一个算法
+   再跑同一行时拿到的已是脏数据——用例之间互相污染，测试结果取决于执行顺序。
+   克隆进子测试是隔离的关键，少它，你会看到"InsertionSort 全绿、MergeSort 莫名红"的灵异现象。
+3. **分治思想**：归并和快排都是"拆小 → 各自解决 → 合并结果"。
+   - 归并：难点在**合**——两个有序半段合并需要 O(n) 临时空间；
+   - 快排：难点在**分**——partition 选主元把小于/大于主元的元素分开，递归处理两段；
+   - 堆排：借助堆结构把"反复找最大值"压到 O(log n)，建堆 O(n)、取顶 n 次，总计 O(n log n)。
+4. **原地 vs 非原地**：`MergeSort` 内部申请临时切片，但**合并结果必须写回 `a`**——
+   只对临时切片排序、原切片纹丝不动，是归并实现最常见的 bug，测试会全红而且报错信息里
+   输入输出一模一样（因为输出就是没动过的输入）。这个 bug 正是"原地契约"逼你面对的：
+   签名里没有返回值，结果只能从入参里出来。
+5. **快排的最坏情况**：主元每次都选到最大/最小值时退化为 O(n²)——已序输入配
+   "取第一个元素当主元"就是最经典的退化组合。本练习不强制优化，但行为 4 的 benchmark
+   会让你亲眼看到它。知道有"随机选主元"和"三数取中"两种常见对策即可。
+
+### 行为 3：性质对照 —— 让 `sort.Ints` 当裁判
+
+| 用例 | 输入生成 | 断言 |
+|---|---|---|
+| 大随机切片 | 固定种子伪随机生成 1000 个 int（含大量重复） | 每个算法的结果与 `sort.Ints` 的结果 `slices.Equal` |
+
+骨架（断言逻辑只有一份，算法表从行为 2 复用思路）：
+
+```go
+func TestAgainstStdlib(t *testing.T) {
+	r := rand.New(rand.NewSource(99)) // 固定种子，失败可复现
+	data := make([]int, 1000)
+	for i := range data {
+		data[i] = r.Intn(500) // 故意用较小的上界制造大量重复元素
+	}
+	want := slices.Clone(data)
+	sort.Ints(want) // 官方实现当裁判
+
+	// algos 表同行为 2；每个算法：got := slices.Clone(data); algo.sort(got);
+	// 断言 slices.Equal(got, want)
+}
+```
+
+**这一步用到的知识点：**
+
+1. **性质测试（property-based）思想**：不再逐字手写"期望输出"，而是断言一条**性质**——
+   "我的实现与权威实现结果一致"。官方 `sort.Ints` 就是现成的裁判（oracle），
+   一个用例顶一千个手写用例。这是 learn-go-with-tests 里 property based tests 的雏形，
+   [tdd/fuzzlab](../fuzzlab/README.md) 会把它推向极致。
+2. **固定种子**：`rand.New(rand.NewSource(99))` 让随机输入可复现——测试失败时
+   同样的输入会再失败，才能定位。用时间戳当种子的测试失败一次就永远抓不回来。
+3. **裁判也要克隆**：`sort.Ints` 同样是原地排序！正确姿势是三份独立切片：
+   `data`（原始输入，全程不动）、`want`（裁判排）、`got`（被测算法的副本）。
+   任何两份共用底层数组，对照就失效——你又一次看到"原地"签名的传染性。
+4. **为什么选"结果与官方一致"而不是"结果升序"这条性质**：两者都对，但前者更强——
+   它同时验证了"元素不丢不多"（排列不变性）。`slices.IsSorted` 只能验证升序，
+   验证不了"排序后还是原来那些元素"。
+
+### 行为 4：Benchmark 全家桶 —— 公平性是全部
+
+在 `bench_test.go` 里给五个选手（四个手写算法 + `sort.Ints` 对照组）跑同一份随机输入：
+
+```go
+func benchmarkInput() []int {
+	r := rand.New(rand.NewSource(99)) // 与行为 3 同种子，测试与 benchmark 输入一致
+	data := make([]int, 1000)
+	for i := range data {
+		data[i] = r.Int()
+	}
+	return data
+}
+
+func BenchmarkSorts(b *testing.B) {
+	algos := []struct {
+		name string
+		sort func([]int)
+	}{
+		{"InsertionSort", InsertionSort},
+		{"MergeSort", MergeSort},
+		{"QuickSort", QuickSort},
+		{"HeapSort", HeapSort},
+		{"StdSortInts", sort.Ints}, // 对照组
+	}
+	for _, algo := range algos {
+		b.Run(algo.name, func(b *testing.B) {
+			data := benchmarkInput()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				input := slices.Clone(data) // 每次迭代一份未排序的新副本
+				b.StartTimer()
+				algo.sort(input)
+			}
+		})
+	}
+}
+```
+
+跑：
+
+```bash
+go test ./tdd/sortbench -bench=. -benchmem
+```
+
+**这一步用到的知识点：**
+
+1. **输入污染是排序 benchmark 最大的坑**：原地排序一次迭代后数据已有序，第二次迭代
+   测的就是"已序输入"——插入排序对近序数据是 O(n)，会**作弊式夺冠**；快排反而退化。
+   不公平的 benchmark 不是误差，是结论直接错误。`b.StopTimer()` / `b.StartTimer()`
+   把克隆成本排除在计时之外：停表 → 准备 → 开表 → 测量，这是每次迭代都要准备
+   新鲜输入的标准姿势。
+2. **另一种公平方案：克隆放进计时，但所有选手一视同仁**。把 `slices.Clone` 留在
+   `StartTimer` 之后——绝对数值含克隆税（偏大），但每个算法交的税相同，**相对比较**
+   依然成立。知道两种方案各自的代价，比背下一种写法重要。
+3. **Go 1.24+ 的 `b.Loop()` 对照写法**：
+
+```go
+for b.Loop() {
+	b.StopTimer()
+	input := slices.Clone(data)
+	b.StartTimer()
+	algo.sort(input)
+}
+```
+
+`b.Loop()` 在第一次返回 true 时自动清零计时（循环外的 `benchmarkInput()` 不再计入，
+省掉手写 `b.ResetTimer()`）、最后一次迭代后自动停表，并且编译器不会把循环体里的
+被测调用优化掉（[Go 官方博客](https://go.dev/blog/testing-b-loop)）。但注意：
+**迭代内的准备工作仍需手动 `b.StopTimer()`/`b.StartTimer()`**——`b.Loop` 只解决
+"开头一次"的计时清零和防优化，不解决每次迭代的克隆开销。
+
+4. **读懂结果**：1000 个随机元素上，插入排序会比三个 O(n log n) 选手慢**两个数量级**
+   上下——复杂度从课本公式变成肉眼可见的数字。`sort.Ints`（内部是 pdqsort，
+   模式防御快速排序）通常最快，手写算法输给它是正常的：它做了坏情况检测、
+   小区间插排等一系列工程优化。
+5. **公平性清单**（以后写任何对照 benchmark 都照这个查）：同一输入（固定种子）、
+   同一规模、同样的准备开销（克隆对所有选手一视同仁，含对照组）、同一次运行
+   （一个 benchmark 函数里跑完，机器状态一致）。
+
+### 行为 5：uber 性能条迷你验证
+
+uber 规范性能章的两条条目，不要背，**用 benchmark 亲眼验证**。两对迷你 benchmark：
+
+| 对 | A | B | 观察指标 |
+|---|---|---|---|
+| 切片容量 | `make([]int, 0, 10000)` 后 append 一万个元素 | `make([]int, 0)` 后 append 一万个元素 | allocs/op：A ≈ 1 次，B ≈ 十几次（反复扩容）；ns/op 也随之拉开 |
+| 数字转字符串 | `strconv.Itoa(42)` | `fmt.Sprint(42)` | allocs/op 与 ns/op 的差距 |
+
+骨架（写进 `bench_test.go`）：
+
+```go
+func BenchmarkMakeWithCap(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		s := make([]int, 0, 10000)
+		for j := 0; j < 10000; j++ {
+			s = append(s, j)
+		}
+	}
+}
+// BenchmarkMakeNoCap：只改 make 那行，去掉容量参数
+
+func BenchmarkStrconvItoa(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_ = strconv.Itoa(42)
+	}
+}
+// BenchmarkFmtSprint：只改被测调用为 fmt.Sprint(42)
+```
+
+**这一步用到的知识点：**
+
+1. **为什么指定容量省分配**：append 容量不够时申请一块**更大的新数组**并整体拷贝
+   （扩容策略与 size class 对齐，见 [basic/slice.go#L60](../../basic/slice.go#L60)）。
+   从 0 涨到 10000 要扩容十几次，每次 = 一次堆分配 + 一次拷贝；一次给足容量则
+   只有 1 次分配。**分配次数是确定的**（数得出来），这就是 allocs/op 比 ns/op
+   更适合验证这条规范的原因——耗时受机器波动，分配次数不波动。
+2. **`fmt.Sprint` 为什么慢**：`fmt` 的参数是 `...any`，int 要先**装箱**进 interface
+   （一次堆分配），再走反射求值路径；`strconv.Itoa` 是数字转字符串的专用快路径，
+   没有装箱没有反射。这正是 uber 规范"字符串转换优先 strconv"条目的机制原因。
+   [basic/interface_empty.go](../../basic/interface_empty.go) 学过的空接口，
+   在这里变成了可测量的性能数字。
+3. **性能条的态度**：规范条目不是教条，是**可验证的假设**。本行为的正确收尾是
+   在报告里亲眼看到差异，而不是记住结论——下次有人争论"这点优化没必要"时，
+   你的回答是跑一个 benchmark。
+
+---
+
+## 三、知识点总结
+
+### 四种排序速查表
+
+| 算法 | 平均 | 最坏 | 额外空间 | 原地 | 稳定 |
+|---|---|---|---|---|---|
+| 插入排序 | O(n²) | O(n²)（逆序）；O(n)（已序） | O(1) | ✅ | ✅ |
+| 归并排序 | O(n log n) | O(n log n) | O(n) 临时切片 | ❌（内部申请，对外呈现原地） | ✅ |
+| 快速排序 | O(n log n) | O(n²)（主元选砸） | O(log n) 递归栈 | ✅ | ❌ |
+| 堆排序 | O(n log n) | O(n log n) | O(1) | ✅ | ❌ |
+
+一句话记忆：归并稳但要空间，快排原地但会退化，堆排两者兼得但不稳定，
+插入只在小规模/近序数据上有主场（标准库小区间优化就用它）。
+
+### 排序稳定性
+
+**相等元素的相对顺序在排序后保持不变** = 稳定排序。int 切片上看不出区别
+（两个 3 就是两个 3，谁在前都一样），排序**结构体切片**时才显形：按年龄排序，
+同年龄的人原顺序是否保留。[tdd/sortiface](../sortiface/README.md) 的
+`sort.Stable` 练习会正面用它——本练习先建立概念。
+
+### Benchmark 公平性速查
+
+| 坑 | 对策 |
+|---|---|
+| 输入污染（原地算法把输入变有序，后续迭代作弊） | 每次迭代用新副本 |
+| 准备开销计入耗时 | `b.StopTimer()` → 准备 → `b.StartTimer()` |
+| 循环外 setup 被计时（b.N 写法） | 循环前 `b.ResetTimer()`；或改用 `b.Loop()`（自动清零） |
+| 被测调用被编译器优化掉 | `b.Loop()`（Go 1.24+）自动防优化 |
+| 随机输入不可复现 | 固定种子 `rand.New(rand.NewSource(常量))` |
+| 只看 ns/op 下结论 | 加 `-benchmem` 对照 allocs/op；分配次数比耗时更稳定 |
+
+### 分治思想一句话
+
+分治 = 拆小 → 各自解决 → 合并结果。归并的难点在"合"，快排的难点在"分"，
+堆排用数据结构（堆）替代了显式的分与合。
+
+### 与书目的对应
+
+- 教程 ch16 后半（排序算法）：把 [basic/slice_sort.go](../../basic/slice_sort.go)
+  的选择/冒泡扩展到四大经典，并补上一直缺的性能对比
+- uber 规范·性能章（指定容量、strconv 优先于 fmt）：行为 5 用 benchmark 落地验证
+- learn-go-with-tests·property based tests：行为 3 的"裁判"思想是它的雏形
+
+---
+
+## 四、验收标准
+
+```bash
+go test ./tdd/sortbench -v                  # 全绿
+go vet ./tdd/sortbench                      # 无警告
+go test ./tdd/sortbench -cover              # 核心逻辑 ≥80%
+go test ./tdd/sortbench -bench=. -benchmem  # 全家桶 + 两对迷你 benchmark 都出数据
+```
+
+本练习无并发代码，不需要 `-race`（阶段 3 的并发练习才是它的战场）。
+
+## 五、完成后自查（能口头回答才算过）
+
+1. 为什么四个算法统一 `func([]int)` 签名？这个决定在行为 2 和行为 4 各兑现了什么价值？
+2. 原地排序的测试里，断言前为什么要 `slices.Clone`？不克隆，行为 2 的用例表会出现什么灵异现象？
+3. 排序 benchmark 里"输入污染"指什么？被污染的 benchmark 里插入排序会呈现什么假象？
+4. `b.Loop()` 相比 `for i := 0; i < b.N; i++` 解决了哪两个问题？迭代内的准备工作还需要手动停表吗？
+5. 归并排序实现最常见的 bug 是什么？（提示：临时切片 vs 写回原切片）它的测试报错有什么特征？
+6. 什么是排序稳定性？四个算法里哪些稳定？为什么 int 切片的测试发现不了不稳定？
+7. 行为 3"让 `sort.Ints` 当裁判"相比手写期望输出，优势和局限各是什么？为什么它比 `slices.IsSorted` 更强？
+
+全部答清后，回到 [根 README 遗漏清单](../../README.md#三对照for-learning-go-tutorial的覆盖检查)，
+把 ch16"排序算法"从 ◐ 改成 ✅（快排/插排/归并/堆排与性能对比均已补上）。

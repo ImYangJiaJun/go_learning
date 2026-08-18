@@ -28,9 +28,9 @@ func main() {
 
 	//科学计数法
 	var f1 float32 = 3.14e2 //表示3.14*10的2次方
-	fmt.Printf("y\t类型：%T\t值：%v\t|%f\t占用字节：%v\n", f1, f1, f1, unsafe.Sizeof(f1))
+	fmt.Printf("f1\t类型：%T\t值：%v\t|%f\t占用字节：%v\n", f1, f1, f1, unsafe.Sizeof(f1))
 	var f2 float32 = 3.14e-2 //表示3.14*10的-2次方
-	fmt.Printf("y\t类型：%T\t值：%v\t|%f\t占用字节：%v\n", f2, f2, f2, unsafe.Sizeof(f2))
+	fmt.Printf("f2\t类型：%T\t值：%v\t|%f\t占用字节：%v\n", f2, f2, f2, unsafe.Sizeof(f2))
 
 	//float精度丢失，出现原因-在二进制中一些数为类似十进制中1/3的循环小数
 	m1 := 8.2
