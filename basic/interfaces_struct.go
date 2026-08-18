@@ -9,7 +9,7 @@ type Animaler2 interface {
 	GetName() string
 }
 
-// 接口嵌套，表示要实现其那套接口的所有方法
+// 接口嵌套，表示要实现嵌套接口的所有方法
 type Animaler interface {
 	Animaler1
 	Animaler2

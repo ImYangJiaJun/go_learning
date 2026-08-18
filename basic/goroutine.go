@@ -19,14 +19,14 @@ func test() {
 		fmt.Println("test hello world", i)
 		time.Sleep(time.Millisecond * 100)
 	}
-	wg.Done() //协程计数器+1
+	wg.Done() //协程计数器-1
 }
 func test1() {
 	for i := 0; i < 10; i++ {
 		fmt.Println("test1 hello world", i)
 		time.Sleep(time.Millisecond * 100)
 	}
-	wg.Done() //协程计数器+1
+	wg.Done() //协程计数器-1
 }
 
 func testShow(i int) {
@@ -56,7 +56,7 @@ func main() {
 	go test1()
 	for i := 0; i < 10; i++ {
 		fmt.Println("main hello world", i)
-		time.Sleep(time.Millisecond * 50) //主进程执行完毕，无论协程是否执行完毕都会被中止
+		time.Sleep(time.Millisecond * 50) //main函数（主协程）执行完毕后整个进程退出，无论其他协程是否执行完毕都会被中止
 	}
 	//time.Sleep(time.Second)//解决方案1-主线程增加等待时间
 	wg.Wait() //解决方案2-使用sync包，wg.Wait表示等待协程执行完毕

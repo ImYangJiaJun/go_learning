@@ -33,7 +33,7 @@ func fnRead(ch chan int) {
 	}
 }
 
-// 向intChan放入1-120000个数
+// 向intChan放入 2 到 n-1 的数
 func putNum(intChan chan<- int, n int) {
 	defer wg1.Done()
 	for i := 2; i < n; i++ {
@@ -104,7 +104,7 @@ func main() {
 	d := <-ch1
 	fmt.Println(d) //3  证明channel为引用数据类型
 
-	//管道阻塞	channel为空时取，满时存，就会报错dedLock
+	//管道阻塞	channel为空时取、满时存会阻塞等待；当所有goroutine都阻塞时会报 fatal error: deadlock
 	ch3 := make(chan int, 1)
 	ch3 <- 0
 	//ch3 <- 1

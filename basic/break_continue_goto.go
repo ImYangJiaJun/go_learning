@@ -6,8 +6,8 @@ func main() {
 
 	/*
 		break		默认跳出当前循环，多重循环中可以用标号label标出想break的循环
-		continue	结束当前循环，开始下一次循环，仅限for中使用
-		go			跳转到指定标签
+		continue	跳过本次循环的剩余语句，直接开始下一次循环，仅限for中使用
+		goto		跳转到指定标签
 	*/
 
 	//break	默认跳出当前循环

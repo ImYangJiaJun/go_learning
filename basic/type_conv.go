@@ -42,7 +42,7 @@ func main() {
 	//string转换成数值
 
 	//string->int
-	aStrInt, _ := strconv.ParseInt(aStr, 10, 64) //(要转换的字符串，进制，转换的位数 32/64...)
+	aStrInt, _ := strconv.ParseInt(aStr, 10, 64) //(要转换的字符串，进制，bitSize取值 0/8/16/32/64)
 	fmt.Printf("\n结果：%v\t结果类型：%T\n", aStrInt, aStrInt)
 
 	//string->float

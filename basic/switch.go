@@ -56,7 +56,7 @@ func main() {
 	}
 
 	//switch的穿透 fallthrough
-	//fallthrough可用执行满足条件的下一个case,一个fallthrough只会穿透一次
+	//fallthrough会无条件执行下一个case的语句体（不判断下一个case的条件），一个fallthrough只会穿透一次
 	println("------------------------------")
 	switch {
 	case age < 24:

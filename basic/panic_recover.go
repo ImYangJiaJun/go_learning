@@ -8,7 +8,7 @@ import (
 /*
 使用panic/recover模式处理异常
 
-panic可以在任何地方触发，recover只有在defer调用的函数中触发
+panic可以在任何地方触发，recover只有在defer的函数中直接调用才有效
 */
 
 func fn1() {

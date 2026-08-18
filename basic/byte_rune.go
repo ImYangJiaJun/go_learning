@@ -21,7 +21,7 @@ func main() {
 	fmt.Printf("\n%%v输出ASCII码：%v\t原样输出用%%c：%c\t\t类型：%T\n", str[1], str[1], str[1])
 
 	//注：一个汉字占用3字节，一个字母占用1字节
-	//unsafe.Sizeof() 不能查看string类型的空间大小，可以使用len查看
+	//unsafe.Sizeof() 返回的是string头部（指针+长度）的固定大小（64位系统16字节），与内容长度无关；字符串内容的字节数用len()查看
 	fmt.Printf("\nerror\tunsafe.Sizeof()\t->\t%v\nright\tlen()\t\t->\t%v\n", unsafe.Sizeof(str), len(str))
 
 	//汉字字符，使用的是utf8编码，编码后的值就是int类型，直接输出的是Unicode编码的10进制

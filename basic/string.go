@@ -56,10 +56,10 @@ func main() {
 	fmt.Printf("\nstr5前缀是否是a\t\t%v\t\tstrings.HasPrefix函数返回类型 %T\n", flagPre, flagPre)
 	fmt.Printf("str5后缀是否是789\t%v\t\tstrings.HasSuffix函数返回类型 %T\n", flagSuf, flagSuf)
 
-	//strings.Index(),strings.LastIndex() 字串出现的位置(结果是目标字符的下标，子串是子串开头的字符的下标)，找不到返回-1
+	//strings.Index(),strings.LastIndex() 子串出现的位置(结果是目标字符的下标，子串是子串开头的字符的下标)，找不到返回-1
 	index := strings.Index(str5, "23")
 	lastIndex := strings.LastIndex(str5, "_")
 	fmt.Printf("\nstr5中23出现的位置 \t%v\tstrings.Index函数返回类型 %T", index, index)
-	fmt.Printf("\nstr5中-最后出现的位置 \t%v\tstrings.LastIndex函数返回类型 %T", lastIndex, lastIndex)
+	fmt.Printf("\nstr5中_最后出现的位置 \t%v\tstrings.LastIndex函数返回类型 %T", lastIndex, lastIndex)
 
 }

@@ -33,7 +33,7 @@ func main() {
 
 	//获取当前时间戳
 	fmt.Println("---------------------------------------------------------")
-	unixTime := timeObj.Unix() //毫秒
+	unixTime := timeObj.Unix() //秒（毫秒用UnixMilli()）
 	fmt.Println("Unix:", unixTime)
 	unixNaTime := timeObj.UnixNano() //纳秒
 	fmt.Println("UnixNano:", unixNaTime)
@@ -49,7 +49,7 @@ func main() {
 	//日期字符串转换时间戳
 	strTime := "2026/08/15 23:47:19"
 	tmp := "2006/01/02 15:04:05"                                        //转换模板
-	timeObj4, success := time.ParseInLocation(tmp, strTime, time.Local) //ParseInLocation(模板,要转换的字符串,时区) 返回：时间对象，转换是否成功
+	timeObj4, success := time.ParseInLocation(tmp, strTime, time.Local) //ParseInLocation(模板,要转换的字符串,时区) 返回：时间对象，error（nil表示转换成功）
 	if success == nil {
 		fmt.Println("ParseInLocation Success:", timeObj4)
 		fmt.Println("TimeUnix", timeObj4.Unix())
