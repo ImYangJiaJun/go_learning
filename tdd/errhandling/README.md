@@ -11,34 +11,60 @@
 
 ## 一、需求规格
 
-### 这个包要做什么
+### 核心功能
 
-**没有 `main` 函数。** 本练习的产出物不是可执行程序，而是一个被测试验证的包——
+实现一个最小的**用户服务包**，它只干两件事：
+
+- **功能一 · 按 id 查用户**：从存储层取用户。三种结果调用方必须能用代码区分开——
+  找到了 / 没这个人 / 存储层坏了。
+- **功能二 · 校验用户信息**：检查 `Name` 和 `Age` 是否合法。
+  既能单字段校验，也能一次收集全部违规再返回。
+
+**没有 `main` 函数。** 产出物不是可执行程序，而是一个被测试验证的包——
 `go test ./tdd/errhandling` 就是它的运行方式，验收者是测试，不是人。
 
-这个包对外提供两个能力：
+为什么是这个需求：error 体系没法凭空练，这两个功能是载体——
+功能一练"哨兵错误 + 错误包装"（行为 1、2），功能二练"自定义错误类型 + 错误聚合"（行为 3、4）。
 
-1. **按 id 查找用户**，三种结果调用方都能用代码区分：
-   - 找到 → 返回用户
-   - 未找到 → 返回可识别的"未找到"错误
-   - 底层存储故障 → 返回带用户 id 上下文的故障错误
-2. **校验用户信息**：
-   - 单个校验 → 返回指明"哪个字段错了"的错误
-   - 批量校验 → 一次返回全部违规，而不是遇到第一个就停
+### 调用关系（谁在调用谁）
 
-### 文件计划（共 5 个文件，分三次建）
+```text
+测试代码 ──► UserService.FindUser(id) ──► Store.Get(id)     功能一
+测试代码 ──► Validate(u) / ValidateAll(u)                   功能二
+```
 
-| 文件 | 里面写什么 | 什么时候建 |
-|---|---|---|
-| `service_test.go` | 行为 1、2 的测试 | **第 1 个建** |
-| `store.go` | `User`、`Store` 接口、`MapStore`、`NewMapStore`、哨兵错误 | 测试编译报错时 |
-| `service.go` | `UserService`、`NewUserService`、`FindUser` | 同上 |
-| `validate_test.go` | 行为 3、4 的测试 | 行为 3 开始时 |
-| `validate.go` | `ValidationError`、`Validate`、`ValidateAll` | 测试编译报错时 |
+`Store` 是接口：实现代码里用 map 版，测试里换成"必定报错"的替身（`stubStore`）——
+这是"存储层坏了"能在测试里确定性重现的关键，也是 Go 面向接口编程的第一次实战。
 
-要写的函数一共 7 个，就是下面契约里的全部，一个不多一个不少。
+### 文件计划（共 5 个文件，按编号顺序建）
+
+最终目录长这样：
+
+```text
+tdd/errhandling/
+├── service_test.go    # 功能一的测试
+├── store.go           # 功能一：存储层（数据结构 + 接口 + map 实现）
+├── service.go         # 功能一：服务层（FindUser 的错误处理逻辑，本练习的核心）
+├── validate_test.go   # 功能二的测试
+└── validate.go        # 功能二：校验逻辑 + 自定义错误类型
+```
+
+| # | 文件 | 这个文件是干什么的 | 里面要写的符号 | 什么时候建 |
+|---|---|---|---|---|
+| 1 | `service_test.go` | 功能一的全部测试 | `TestFindUser_Found`、`TestFindUser_NotFound`、`stubStore`、`TestFindUser_StorageFailure` | **第 1 个建** |
+| 2 | `store.go` | 功能一的存储层：用户数据结构、`Store` 接口和它的 map 实现 | `User`、`ErrUserNotFound`、`ErrStorage`、`Store`、`MapStore`、`NewMapStore`、`MapStore.Get` | 测试编译报错时 |
+| 3 | `service.go` | 功能一的服务层：决定哪种错误原样返回、哪种包装 | `UserService`、`NewUserService`、`FindUser` | 与 `store.go` 一起 |
+| 4 | `validate_test.go` | 功能二的全部测试 | `TestValidate`、`TestValidateAll` | 行为 3 开始时 |
+| 5 | `validate.go` | 功能二的校验逻辑和自定义错误类型 | `ErrEmptyName`、`ErrInvalidAge`、`ValidationError`、`ValidationError.Error`、`Validate`、`ValidateAll` | 测试编译报错时 |
+
+要写的函数/方法一共 7 个，就是下面契约里的全部，一个不多一个不少。
 
 ### 接口契约（固定，按此实现，名字不要改）
+
+完备性原则：**你要写的每一个类型、每一个签名都在下面**，按文件分组。
+你唯一需要自己实现的是函数体；如果写代码时发现要发明契约之外的类型或函数，说明走偏了。
+
+**写在 `store.go`：**（需要 `import "errors"`）
 
 ```go
 package errhandling
@@ -49,35 +75,55 @@ type User struct {
     Age  int
 }
 
-// 哨兵错误（包级变量）
+// 哨兵错误：包级变量，调用方用 errors.Is 匹配
 var ErrUserNotFound = errors.New("user not found")
 var ErrStorage      = errors.New("storage failure")
-var ErrEmptyName    = errors.New("empty name")
-var ErrInvalidAge   = errors.New("invalid age")
 
-// 自定义错误类型（行为 3 用）
-type ValidationError struct {
-    Field string
-    Msg   string
-}
-func (e *ValidationError) Error() string // 指针接收者，格式自定
-
-// 存储层抽象：让"底层故障"在测试中可确定性地触发
+// 存储层抽象：让"底层故障"在测试中可用替身确定性地触发
 type Store interface {
     Get(id int) (User, error)
 }
 
-// map 实现：正常存取；id 不存在返回 (User{}, ErrUserNotFound)
+// MapStore 是 Store 的 map 实现，唯一字段就是那张 map
+type MapStore struct {
+    users map[int]User
+}
+
 func NewMapStore(users map[int]User) MapStore
 
-// 服务层
+// id 存在 → 返回 User 和 nil；不存在 → 返回 User{} 和 ErrUserNotFound
+func (m MapStore) Get(id int) (User, error)
+```
+
+**写在 `service.go`：**（需要 `import "errors"` 和 `"fmt"`）
+
+```go
+// UserService 通过构造器注入 Store——测试时注入的是 stubStore 替身
+type UserService struct {
+    store Store
+}
+
 func NewUserService(s Store) UserService
 
-// 语义：
+// FindUser 是整个练习的核心功能，语义只有三条：
 // - 底层返回 ErrUserNotFound → 原样返回（不包装）
 // - 底层返回其他错误 → fmt.Errorf("find user %d: %w", id, err) 包装后返回
 // - 找到 → 返回 User 和 nil
 func (s UserService) FindUser(id int) (User, error)
+```
+
+**写在 `validate.go`：**（需要 `import "errors"`）
+
+```go
+var ErrEmptyName  = errors.New("empty name")
+var ErrInvalidAge = errors.New("invalid age")
+
+// 自定义错误类型：调用方用 errors.As 取出 Field 字段
+type ValidationError struct {
+    Field string
+    Msg   string
+}
+func (e *ValidationError) Error() string // 指针接收者，返回格式自定（建议含 Field 和 Msg）
 
 // 只校验 Age：Age < 0 → 返回 &ValidationError{Field: "age", ...}；否则 nil
 func Validate(u User) error
@@ -87,6 +133,12 @@ func Validate(u User) error
 // - 有违规 → errors.Join 聚合返回；全合法 → nil
 func ValidateAll(u User) error
 ```
+
+**契约核对清单**（写完代码后数一遍，应一个不少）：
+
+- 5 个类型：`User`、`Store`、`MapStore`、`UserService`、`ValidationError`
+- 7 个函数/方法：`NewMapStore`、`MapStore.Get`、`NewUserService`、`UserService.FindUser`、`ValidationError.Error`、`Validate`、`ValidateAll`
+- 4 个哨兵错误：`ErrUserNotFound`、`ErrStorage`、`ErrEmptyName`、`ErrInvalidAge`
 
 ### 第一步：手把手起步（行为 1 的测试直接给你当模板）
 
