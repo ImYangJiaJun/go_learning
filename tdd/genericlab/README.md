@@ -6,36 +6,65 @@ TDD 流程里真正用熟。先手写函数式三件套 Map / Filter / Reduce �
 Go 1.23 的 range-over-func 让自定义迭代器成为一等公民。
 
 > 本任务是**机制学习型**练习：接口契约已固定，不要花时间在 API 设计上。
-> 用法：第一节看需求；第二节边做边学——每个行为下面附有这一步要用到的知识点讲解；
-> 第三节是知识点总结，做完后对照自查。
+> 用法：第一节看需求规格（接口契约固定，照此实现）；第二节是纯任务单——只给行为目标、用例表和验收命令，测试代码全部自己写；第三节是知识点讲解，做之前通读或卡壳时查阅，做完后对照自查。
 
 ---
 
 ## 一、需求规格
 
-### 这个包要做什么
+### 核心功能
 
-**没有 `main` 函数。** 本练习的产出物不是可执行程序，而是一个被测试验证的包——
-`go test ./tdd/genericlab` 就是它的运行方式，验收者是测试，不是人。
-
-这个包对外提供四个能力：
+实现一个最小的**泛型工具函数包**，它对外提供四个能力：
 
 - **Map**：把切片的每个元素映射成另一个值（允许变成另一种类型），返回新切片
 - **Filter**：按谓词筛出元素，保持原相对顺序，返回新切片
 - **Reduce**：从初始值出发，把整个切片折叠成一个值（结果类型可与元素类型不同）
 - **All**：返回切片的 range-over-func 迭代器（Go 1.23，🔺行为 5 才做）
 
-### 文件计划（共 5 个文件）
+**没有 `main` 函数。** 产出物不是可执行程序，而是一个被测试验证的包——
+`go test ./tdd/genericlab` 就是它的运行方式，验收者是测试，不是人。
 
-| 文件 | 里面写什么 | 什么时候建 |
-|---|---|---|
-| `generic_test.go` | Map / Filter / Reduce 的全部测试 | **第 1 个建** |
-| `generic.go` | Map / Filter / Reduce 三个函数 | 测试编译报错时 |
-| `stdlib_test.go` | 行为 4 的标准库对照实验（只写测试，没有实现文件） | 行为 4 |
-| `iterator_test.go` | All 的全部测试 | 行为 5 |
-| `iterator.go` | All 函数 | 行为 5 测试编译报错时 |
+### 调用关系（谁在调用谁）
+
+```text
+测试代码 ──► Map / Filter / Reduce（generic.go）                  行为 1–3
+测试代码 ──► slices / maps 标准库函数（对照实验，不写实现）        行为 4
+测试代码 ──► All（iterator.go）──► 可喂给 slices.Collect 等       行为 5
+```
+
+四个能力全是包级函数：没有结构体、没有接口、没有构造器，测试直接调用——
+本练习的复杂度全在类型参数机制上，不在 API 组织上。
+
+### 文件计划（共 5 个文件，按编号顺序建）
+
+最终目录长这样：
+
+```text
+tdd/genericlab/
+├── generic_test.go    # 行为 1–3：Map / Filter / Reduce 的全部测试
+├── generic.go         # 行为 1–3：三件套实现（本练习的核心）
+├── stdlib_test.go     # 行为 4：标准库对照实验（只有测试，没有对应实现文件）
+├── iterator_test.go   # 行为 5：All 的全部测试
+└── iterator.go        # 行为 5：All 的实现
+```
+
+| # | 文件 | 这个文件是干什么的 | 里面要写的符号 | 什么时候建 |
+|---|---|---|---|---|
+| 1 | `generic_test.go` | Map / Filter / Reduce 的全部测试 | `TestMap`（平方、R≠T 两个用例）、`TestFilter`、`TestReduce`（覆盖行为 1–3，均按用例表自拟，可表驱动） | **第 1 个建** |
+| 2 | `generic.go` | 三件套实现 | `Map`、`Filter`、`Reduce` | 测试编译报错时 |
+| 3 | `stdlib_test.go` | 行为 4 的标准库对照实验（只写测试，没有实现文件） | 6 个对照实验测试（名字自拟，如 `TestSlicesEqual`） | 行为 4 |
+| 4 | `iterator_test.go` | All 的全部测试 | 完整遍历 / 空切片 / string / 提前停止 / 对接标准库用例（覆盖行为 5，均按用例表自拟） | 行为 5 |
+| 5 | `iterator.go` | All 函数 | `All` | 行为 5 测试编译报错时 |
+
+要写的函数一共 4 个，就是下面契约里的全部，一个不多一个不少；
+本练习不定义任何类型、常量或哨兵错误。
 
 ### 接口契约（固定，按此实现，名字不要改）
+
+完备性原则：**你要写的每一个签名都在下面**，按文件分组。
+你唯一需要自己实现的是函数体；如果写代码时发现要发明契约之外的函数或类型，说明走偏了。
+
+**写在 `generic.go`：**（无需 import）
 
 ```go
 package genericlab
@@ -53,51 +82,92 @@ func Filter[T any](s []T, pred func(T) bool) []T
 func Reduce[T, R any](s []T, init R, f func(R, T) R) R
 ```
 
-`All` 的契约在行为 5 给出（同样是固定的，名字不要改）。
-
-### 第一步：手把手起步（行为 1 的第一个测试）
-
-1. 在 `tdd/genericlab/` 下新建 `generic_test.go`，写入：
+**写在 `iterator.go`：**（契约按原始函数类型写，无需 import；等价的 `iter.Seq[T]` 写法在行为 5 讲解）
 
 ```go
-package genericlab
-
-import (
-	"reflect"
-	"testing"
-)
-
-func TestMap_平方(t *testing.T) {
-	got := Map([]int{1, 2, 3}, func(x int) int { return x * x })
-	want := []int{1, 4, 9}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("期望 %v，得到 %v", want, got)
-	}
-}
+// All 返回 s 的迭代器：按下标顺序产出每个元素；
+// 消费方在 yield 中返回 false 时立即停止遍历，且之后不得再调用 yield
+func All[T any](s []T) func(yield func(T) bool)
 ```
 
-2. 运行 `go test ./tdd/genericlab` → **编译失败**：`undefined: Map`——这就是 RED：
-   测试描述了你想要但还不存在的代码。
-3. 新建 `generic.go`，写**最少**的代码让测试通过
-   （提示：`make([]R, 0, len(s))` + for 循环 + append；先只让这一个用例变绿，
-   不要顺手把 Filter / Reduce 也写了——一次只做一件事）。
-4. 再跑 `go test ./tdd/genericlab` → 绿。第一轮 RED → GREEN 完成。
+**契约核对清单**（写完代码后数一遍，应一个不少）：
+
+- 0 个类型：本练习不定义任何结构体 / 接口
+- 4 个函数：`Map`、`Filter`、`Reduce`、`All`
+- 0 个哨兵错误 / 常量
 
 ---
 
-## 二、任务单（边做边学）
+## 二、任务单
 
 ### 行为 1：Map —— 类型参数与类型推断
 
-完整测试代码已在第一节「第一步：手把手起步」给出，按那里的四步走完 RED → GREEN 后，
-再补一个 R 与 T 不同的用例（在旁边新写一个 Test 函数，或改成表驱动，二选一）：
+先写 `TestMap` 的测试，再写最少实现让它变绿——先写测试，编译失败（`undefined: Map`）即 RED。
+用例覆盖下面两条（写成两个 Test 函数或表驱动，二选一；切片判等先用 `reflect.DeepEqual`，
+行为 4 再统一换成 `slices.Equal`）：
 
 | 用例名 | 输入 | 期望 |
 |---|---|---|
 | 平方映射 | `Map([]int{1, 2, 3}, func(x int) int { return x * x })` | `[]int{1, 4, 9}` |
 | int 映射成 string | `Map([]int{1, 2}, func(x int) string { return strconv.Itoa(x * 10) })` | `[]string{"10", "20"}` |
 
-**这一步用到的知识点：**
+### 行为 2：Filter —— 闭包做谓词
+
+按用例表自己写 `TestFilter`（结构仿照行为 1），然后实现 `Filter` 到变绿：
+
+| 用例名 | 输入 | 期望 |
+|---|---|---|
+| 筛出偶数 | `Filter([]int{1, 2, 3, 4, 5, 6}, func(x int) bool { return x%2 == 0 })` | `[]int{2, 4, 6}` |
+| 全部不满足 | `Filter([]int{1, 3, 5}, func(x int) bool { return x%2 == 0 })` | `[]int{}`（非 nil） |
+| 空切片输入 | `Filter([]int{}, func(x int) bool { return x%2 == 0 })` | `[]int{}`（非 nil） |
+| 换类型：按长度筛字符串 | `Filter([]string{"go", "java", "c"}, func(s string) bool { return len(s) > 1 })` | `[]string{"go", "java"}` |
+
+### 行为 3：Reduce —— R 与 T 可以不同
+
+按用例表自己写 `TestReduce`，然后实现 `Reduce` 到变绿：
+
+| 用例名 | 输入 | 期望 |
+|---|---|---|
+| 求和 | `Reduce([]int{1, 2, 3, 4}, 0, func(acc, x int) int { return acc + x })` | `10` |
+| 空切片返回 init | `Reduce([]int{}, 5, func(acc, x int) int { return acc + x })` | `5` |
+| 求积（init 是单位元 1） | `Reduce([]int{2, 3, 4}, 1, func(acc, x int) int { return acc * x })` | `24` |
+| 🔺R≠T：int 切片拼成 string | `Reduce([]int{1, 2, 3}, "", func(acc string, x int) string { return acc + strconv.Itoa(x) })` | `"123"` |
+
+### 行为 4：🔺标准库替代 —— slices / maps（Go 1.21+）
+
+这一步**没有要实现的新函数**：新建 `stdlib_test.go`，把下面的对照实验写成测试跑绿，
+并把行为 1–3 测试里的 `reflect.DeepEqual` 全部换成 `slices.Equal`：
+
+| 用例名 | 输入 | 期望 |
+|---|---|---|
+| slices.Equal 断言相等 | `slices.Equal([]int{1, 4, 9}, []int{1, 4, 9})` | `true` |
+| slices.Equal 对 nil 宽容 | `slices.Equal(nil, []int{})` | `true`（DeepEqual 在这里是 false） |
+| slices.Sort 原地排序 | `a := []int{3, 1, 2}; slices.Sort(a)` | `a` 本身变成 `[]int{1, 2, 3}` |
+| slices.Concat 拼接 | `slices.Concat([]int{1, 2}, []int{3}, []int{4, 5})` | `[]int{1, 2, 3, 4, 5}`，且三个入参都不被修改 |
+| maps.Keys 收集并排序 | `m := map[string]int{"b": 2, "a": 1}`；`slices.Sorted(maps.Keys(m))` | `[]string{"a", "b"}` |
+| maps.Values 收集并排序 | `slices.Sorted(maps.Values(m))` | `[]int{1, 2}` |
+
+### 行为 5：🔺range-over-func 迭代器（Go 1.23）
+
+`All` 的契约见第一节「接口契约」（同样固定，名字不要改；契约按原始函数类型写，
+等价的 `iter.Seq[T]` 写法见第三节行为 5 的知识点）。
+
+新建 `iterator_test.go`，按用例表自己写测试——先写测试，编译失败即 RED，再写最少实现变绿
+（"提前 break"是验证协议的关键用例：遍历到第 2 个元素就 break，统计循环体执行次数）：
+
+| 用例名 | 输入 | 期望 |
+|---|---|---|
+| 完整遍历 | for range 收集 `All([]int{1, 2, 3})` | `[]int{1, 2, 3}` |
+| 空切片 | for range 收集 `All([]int{})` | `[]int{}`，yield 一次都没被调用 |
+| 换类型：string | for range 收集 `All([]string{"a", "b"})` | `[]string{"a", "b"}` |
+| 提前 break | 遍历到第 2 个元素就 break，统计循环体执行次数 | 恰好 2 次（迭代器没有多产出） |
+| 对接标准库 | `slices.Collect(All([]int{1, 2, 3}))` | `[]int{1, 2, 3}` |
+
+---
+
+## 三、知识点总结
+
+### 行为 1：Map —— 类型参数与类型推断
 
 1. **类型参数**：`Map[T, R any]` 方括号里声明的 T、R 就是类型参数——它们不是具体类型，
    是"占位符"，调用时才被换成真类型。函数体里可以把 T/R 当普通类型用（声明变量、append、传参）。
@@ -117,17 +187,6 @@ func TestMap_平方(t *testing.T) {
 
 ### 行为 2：Filter —— 闭包做谓词
 
-按用例表自己写 `TestFilter`（结构仿照行为 1），然后实现 `Filter` 到变绿：
-
-| 用例名 | 输入 | 期望 |
-|---|---|---|
-| 筛出偶数 | `Filter([]int{1, 2, 3, 4, 5, 6}, func(x int) bool { return x%2 == 0 })` | `[]int{2, 4, 6}` |
-| 全部不满足 | `Filter([]int{1, 3, 5}, func(x int) bool { return x%2 == 0 })` | `[]int{}`（非 nil） |
-| 空切片输入 | `Filter([]int{}, func(x int) bool { return x%2 == 0 })` | `[]int{}`（非 nil） |
-| 换类型：按长度筛字符串 | `Filter([]string{"go", "java", "c"}, func(s string) bool { return len(s) > 1 })` | `[]string{"go", "java"}` |
-
-**这一步用到的知识点：**
-
 1. **类型参数按需声明**：Filter 只有一个 T——泛型不是越多越好，每个类型参数都得在签名里真正用到才有意义。
 2. **闭包捕获**：`pred` 是闭包，可以捕获测试里的局部变量，如
    `threshold := 3; Filter(s, func(x int) bool { return x > threshold })`——
@@ -138,17 +197,6 @@ func TestMap_平方(t *testing.T) {
    （共享底层数组互污，正是 [tdd/slicelab](../slicelab/README.md) 要练的陷阱）——工具函数一律新分配。
 
 ### 行为 3：Reduce —— R 与 T 可以不同
-
-按用例表自己写 `TestReduce`，然后实现 `Reduce` 到变绿：
-
-| 用例名 | 输入 | 期望 |
-|---|---|---|
-| 求和 | `Reduce([]int{1, 2, 3, 4}, 0, func(acc, x int) int { return acc + x })` | `10` |
-| 空切片返回 init | `Reduce([]int{}, 5, func(acc, x int) int { return acc + x })` | `5` |
-| 求积（init 是单位元 1） | `Reduce([]int{2, 3, 4}, 1, func(acc, x int) int { return acc * x })` | `24` |
-| 🔺R≠T：int 切片拼成 string | `Reduce([]int{1, 2, 3}, "", func(acc string, x int) string { return acc + strconv.Itoa(x) })` | `"123"` |
-
-**这一步用到的知识点：**
 
 1. **R 由 init 推断**：`Reduce[T, R any](s []T, init R, f func(R, T) R)` 里 R 的推断来源是
    `init` 实参而不是 `s`——这正是 R 与 T 能不同类型的原因：`[]int` 可以折叠成 `string`。
@@ -173,20 +221,6 @@ func TestMap_平方(t *testing.T) {
 
 ### 行为 4：🔺标准库替代 —— slices / maps（Go 1.21+）
 
-这一步**没有要实现的新函数**：新建 `stdlib_test.go`，把下面的对照实验写成测试跑绿，
-并把行为 1–3 测试里的 `reflect.DeepEqual` 全部换成 `slices.Equal`：
-
-| 用例名 | 输入 | 期望 |
-|---|---|---|
-| slices.Equal 断言相等 | `slices.Equal([]int{1, 4, 9}, []int{1, 4, 9})` | `true` |
-| slices.Equal 对 nil 宽容 | `slices.Equal(nil, []int{})` | `true`（DeepEqual 在这里是 false） |
-| slices.Sort 原地排序 | `a := []int{3, 1, 2}; slices.Sort(a)` | `a` 本身变成 `[]int{1, 2, 3}` |
-| slices.Concat 拼接 | `slices.Concat([]int{1, 2}, []int{3}, []int{4, 5})` | `[]int{1, 2, 3, 4, 5}`，且三个入参都不被修改 |
-| maps.Keys 收集并排序 | `m := map[string]int{"b": 2, "a": 1}`；`slices.Sorted(maps.Keys(m))` | `[]string{"a", "b"}` |
-| maps.Values 收集并排序 | `slices.Sorted(maps.Values(m))` | `[]int{1, 2}` |
-
-**这一步用到的知识点：**
-
 1. **标准库已有就别重复造轮子**：Go 1.21 新增 `slices` / `maps` / `cmp` 三个泛型包。注意官方刻意
    **没有**提供泛型 Map/Filter/Reduce——Go 团队评估后认为普通 for 循环已经足够直白，
    泛型链式调用在 Go 的语法里反而别扭。所以本练习手写三件套是**练手理解原理**；生产代码的优先级是：
@@ -203,48 +237,13 @@ func TestMap_平方(t *testing.T) {
 
 ### 行为 5：🔺range-over-func 迭代器（Go 1.23）
 
-契约（同样固定，名字不要改）：
-
-```go
-// All 返回 s 的迭代器：按下标顺序产出每个元素；
-// 消费方在 yield 中返回 false 时立即停止遍历，且之后不得再调用 yield
-func All[T any](s []T) func(yield func(T) bool)
-```
-
-新建 `iterator_test.go`，按用例表自己写测试（"提前 break"是验证协议的关键用例，骨架见下）：
-
-| 用例名 | 输入 | 期望 |
-|---|---|---|
-| 完整遍历 | for range 收集 `All([]int{1, 2, 3})` | `[]int{1, 2, 3}` |
-| 空切片 | for range 收集 `All([]int{})` | `[]int{}`，yield 一次都没被调用 |
-| 换类型：string | for range 收集 `All([]string{"a", "b"})` | `[]string{"a", "b"}` |
-| 提前 break | 遍历到第 2 个元素就 break，统计循环体执行次数 | 恰好 2 次（迭代器没有多产出） |
-| 对接标准库 | `slices.Collect(All([]int{1, 2, 3}))` | `[]int{1, 2, 3}` |
-
-```go
-func TestAll_提前停止(t *testing.T) {
-	calls := 0
-	for range All([]int{1, 2, 3, 4, 5}) {
-		calls++
-		if calls == 2 {
-			break
-		}
-	}
-	if calls != 2 {
-		t.Errorf("期望循环体只执行 2 次，实际 %d 次——迭代器没有尊重 yield 返回的 false", calls)
-	}
-}
-```
-
-**这一步用到的知识点：**
-
 1. **迭代器协议**：`func(yield func(T) bool)` 就是 Go 1.23 定义的标准迭代器形状。
    `for v := range seq` 会被编译器翻译成 `seq(func(v T) bool { 循环体; return true })`——
    **你的循环体被包装成 yield 回调**，由迭代器在自己的循环里反复调用，把值"推"给你。
 2. **yield 返回 false = 停止遍历**：`break` 翻译成 `return false`，`continue` 翻译成 `return true`。
    所以实现必须写成 `if !yield(v) { return }`——收到 false 立刻返回；协议规定此后不得再调用 yield
    （再调会直接 panic）。"提前 break"用例验证的正是这一点。
-3. **更地道的写法 `iter.Seq[T]`**：标准库 `iter` 包定义了类型别名
+3. **更地道的写法 `iter.Seq[T]`**：标准库 `iter` 包定义了一个命名函数类型
    `type Seq[V any] = func(yield func(V) bool)`，把返回类型写成 `iter.Seq[T]` 与契约完全等价；
    双值版 `iter.Seq2[K, V]` 产出键值对（`maps.All` 就是 Seq2）。契约按原始函数类型写，
    是为了先看清协议本身长什么样。
@@ -253,10 +252,6 @@ func TestAll_提前停止(t *testing.T) {
    就是因为它轻量且不引入并发。
 5. **协议统一的红利**：行为 4 的 `maps.Keys` 返回 iter.Seq，`slices.Collect` / `slices.Sorted` 消费
    iter.Seq——你手写的 `All` 同样可以直接喂给它们（`slices.Collect(All(s))`）。一套协议，全库互通。
-
----
-
-## 三、知识点总结
 
 ### 约束速查
 

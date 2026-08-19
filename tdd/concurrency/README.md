@@ -6,8 +6,9 @@
 
 > 本任务是**机制学习型**练习：接口契约已固定（仅行为 3 一个函数；行为 1/2/4 用测试
 > 刻画 Go 语言本身的语义，没有产品代码可设计）。
-> 用法：第一节看需求；第二节边做边学——每个行为下面附有这一步要用到的知识点讲解；
-> 第三节是知识点总结，做完后对照自查。
+> 用法：第一节看需求规格（接口契约固定，照此实现）；第二节是纯任务单——只给行为目标、
+> 用例表和验收命令，测试代码全部自己写；第三节是知识点讲解，做之前通读或卡壳时查阅，
+> 做完后对照自查。
 
 ---
 
@@ -27,19 +28,45 @@
 
 包名用 `concurrency`：本练习只导入 `testing`/`time`/`sync`，与标准库无重名，不需要改名。
 
-### 文件计划（共 2 个文件）
+### 调用关系（谁在调用谁）
 
-| 文件 | 里面写什么 | 什么时候建 |
-|---|---|---|
-| `concurrency_test.go` | 全部测试（行为 1/2/4 只测 Go 语义，不需要产品代码） | **第 1 个建** |
-| `timeout.go` | `FetchWithTimeout`（本练习唯一要实现的函数） | 行为 3 测试编译报错时 |
+```text
+测试代码 ──► Go 并发原语本身（close / 无缓冲收发 / WaitGroup）      行为 1/2/4
+测试代码 ──► FetchWithTimeout(ch, d) ──► select 等 <-ch 与 <-time.After(d)   行为 3
+```
+
+行为 1/2/4 的被测对象是 Go 语言本身：测试直接操作原语，中间没有产品代码，
+所以没有 RED。只有行为 3 是"测试 → 产品函数"的调用链——本练习唯一的 RED 在这。
+
+### 文件计划（共 2 个文件，按编号顺序建）
+
+最终目录长这样：
+
+```text
+tdd/concurrency/
+├── concurrency_test.go   # 全部测试（含行为 3 的测试辅助函数 slowCh）
+└── timeout.go            # FetchWithTimeout：本练习唯一的产品函数
+```
+
+| # | 文件 | 这个文件是干什么的 | 里面要写的符号 | 什么时候建 |
+|---|---|---|---|---|
+| 1 | `concurrency_test.go` | 全部测试：行为 1/2/4 刻画 Go 语义（无产品代码），行为 3 测超时函数 | `TestReceiveFromClosedChannel`、`TestDoubleClosePanics`、`TestSendOnClosedChannelPanics`、`TestUnbufferedChannelBlocksUntilReceived`、`slowCh`、`TestFetchWithTimeout`、`TestWaitGroupNegativeCounterPanics`、`TestWaitGroupGoEquivalentToAddDone` | **第 1 个建** |
+| 2 | `timeout.go` | 本练习唯一的产品代码：超时等待工具 | `FetchWithTimeout` | 行为 3 测试编译报错时 |
+
+要实现的产品函数只有 1 个，就是下面契约里的全部，一个不多一个不少。测试文件里
+还有 7 个测试函数和 1 个测试辅助 `slowCh`，按第二节任务单各行为的用例表全部自己写。
 
 ### 接口契约（固定，按此实现，名字不要改）
 
+完备性原则：**本练习要实现的全部产品符号都在下面**——刻意只有 1 个函数（行为 1/2/4
+刻画的是 Go 语言本身的语义，没有产品代码可契约）。测试符号（7 个测试函数、辅助
+`slowCh`）不属于契约，按第二节任务单的用例表自行编写。如果写 `timeout.go` 时发现要发明契约
+之外的类型或函数，说明走偏了。
+
+**写在 `timeout.go`：**（需要 `import "time"`）
+
 ```go
 package concurrency
-
-import "time"
 
 // FetchWithTimeout 在时限 d 内等待 ch 上的值：
 // 收到则返回 (值, true)；超时返回 ("", false)，d 从调用时刻起算。
@@ -47,66 +74,16 @@ import "time"
 func FetchWithTimeout(ch <-chan string, d time.Duration) (string, bool)
 ```
 
-### 第一步：手把手起步（行为 1：close 三规则）
+**契约核对清单**（写完代码后数一遍，应一个不少）：
 
-1. 在 `tdd/concurrency/` 下新建 `concurrency_test.go`，写入（本练习唯一给全代码的行为）：
-
-```go
-package concurrency
-
-import "testing"
-
-// 规则 1：从已关闭的 channel 接收，立即得到零值，ok == false（ok-idiom）
-func TestReceiveFromClosedChannel(t *testing.T) {
-	ch := make(chan string)
-	close(ch)
-
-	got, ok := <-ch
-	if got != "" {
-		t.Errorf("已关闭 channel 应返回零值 \"\"，得到 %q", got)
-	}
-	if ok {
-		t.Error("已关闭 channel 的 ok 应为 false")
-	}
-}
-
-// 规则 2：重复 close 会 panic（close of closed channel）
-func TestDoubleClosePanics(t *testing.T) {
-	ch := make(chan int)
-	close(ch)
-
-	defer func() {
-		if recover() == nil {
-			t.Error("重复 close 没有 panic")
-		}
-	}()
-	close(ch) // 期望这一行 panic
-}
-
-// 规则 3：向已关闭的 channel 发送会 panic（send on closed channel）
-func TestSendOnClosedChannelPanics(t *testing.T) {
-	ch := make(chan int, 1) // 带缓冲：排除"无人接收"的干扰，panic 只能来自"已关闭"
-	close(ch)
-
-	defer func() {
-		if recover() == nil {
-			t.Error("向已关闭 channel 发送没有 panic")
-		}
-	}()
-	ch <- 1 // 期望这一行 panic
-}
-```
-
-2. 运行 `go test ./tdd/concurrency` → **直接全绿**。这不是漏了步骤：行为 1/2/4 刻画的
-   是 Go 语言本身的语义，不依赖任何待实现函数，这类"刻画测试"没有 RED 阶段。
-3. 本练习的 RED 在行为 3：第一次运行它的测试会**编译失败** `undefined: FetchWithTimeout`
-   ——编译失败就是 RED；然后写最少实现到变绿（详见行为 3）。
+- 1 个函数：`FetchWithTimeout`
+- 0 个类型、0 个常量、0 个哨兵错误——契约刻意极小，多写一个符号就是走偏
 
 ---
 
-## 二、任务单（边做边学）
+## 二、任务单
 
-### 行为 1：close 三规则（测试代码已在"第一步"完整给出）
+### 行为 1：close 三规则
 
 | 用例 | 操作 | 具体断言 |
 |---|---|---|
@@ -114,22 +91,64 @@ func TestSendOnClosedChannelPanics(t *testing.T) {
 | 重复 close | 对已关闭的 channel 再次 `close(ch)` | recover 到 panic（`close of closed channel`） |
 | 向已关闭发送 | `close(ch)` 后 `ch <- 1` | recover 到 panic（`send on closed channel`） |
 
-**这一步用到的知识点：**
+先按用例表写三个测试：这是刻画 Go 既有语义的测试，不依赖任何待实现函数，运行
+`go test ./tdd/concurrency` 应**直接全绿**（这类"刻画测试"没有 RED 阶段）。
+断言 panic 用 defer+recover 的固定模式，写法原理见第三节「行为 1」知识点 3。
+本行为的全部知识点讲解在第三节「行为 1：close 三规则」。
 
-1. **close 语义速查全表**（本练习的根基，背下来）：
+### 行为 2：无缓冲 channel 的同步语义——证明发送方会一直阻塞
 
-| 操作 | 对象状态 | 结果 |
+| 用例（场景） | 操作序列 | 具体断言 |
 |---|---|---|
-| 接收 `<-ch` | 已关闭、缓冲已读空 | 立即返回零值，`ok == false` |
-| 接收 `<-ch` | 已关闭、缓冲还有数据 | 照常读出数据，`ok == true`；读空后才出现上一行 |
-| 发送 `ch <- v` | 已关闭（无论缓冲满不满） | panic: `send on closed channel` |
-| `close(ch)` | 已关闭 | panic: `close of closed channel` |
-| `close(ch)` | nil channel | panic: `close of nil channel` |
-| 发送 / 接收 | nil channel | 永远阻塞（**不是 panic**；select 里可用 nil 分支禁用某个 case） |
+| 接收方就绪前，发送一直阻塞 | goroutine 执行 `ch <- "x"` 后 `close(sent)`；主测试**故意不接收** | select `sent` vs `time.After(50ms)`：必须走到 time.After 分支（50ms 内 sent 未被 close） |
+| 接收之后，发送立刻完成 | 主测试 `<-ch` 收到 `"x"`，然后再次 select | 必须走到 `sent` 分支（接收后发送方立即解除阻塞；超时保险放宽到 1s） |
 
-原则一句话：**关闭是发送方的职责**，接收方靠 ok-idiom 或 `for range` 感知关闭，
-绝不反过来（接收方一 close，发送方下次发送就 panic）。
+按用例表自己写测试：无缓冲 channel `ch` 之外，再起一个事件 channel `sent`——
+goroutine 执行 `ch <- "x"` 成功后才 `close(sent)`；两幕各用一个 select
+（`sent` vs `time.After`），先断言"该阻塞"，接收后再断言"该解除"。运行
+`go test ./tdd/concurrency -run TestUnbufferedChannelBlocksUntilReceived` 应直接全绿。
+本行为的全部知识点讲解在第三节「行为 2：无缓冲 channel 的同步语义」。
 
+### 行为 3：超时模式 `FetchWithTimeout`（本练习的 RED 在这里）
+
+| 用例名 | ch 的行为 | d | 期望返回 |
+|---|---|---|---|
+| 超时返回零值和 false | goroutine 50ms 后才发送 `"late"` | `10 * time.Millisecond` | `("", false)` |
+| 时限内取到值 | goroutine 50ms 后才发送 `"late"` | `1 * time.Second` | `("late", true)` |
+
+测试辅助自己写：`slowCh(delay, v)` 返回一个 channel，内部 goroutine 睡 `delay`
+后向它发送 `v`。测试用表驱动按上表写两行用例（建议字段 `delay` / `d` / `want` /
+`wantOK`），循环里调用 `FetchWithTimeout(slowCh(c.delay, "late"), c.d)` 并断言两个返回值。
+
+加菜（可选）：超时用例里记录调用前后时刻，断言耗时明显小于 50ms——证明它确实
+在 10ms 超时返回，而不是傻等值到达。
+
+步骤：先写测试 → `go test ./tdd/concurrency -run TestFetchWithTimeout` → **编译失败
+`undefined: FetchWithTimeout`，这就是 RED** → 新建 `timeout.go`，按契约写最少实现
+（一个 `select`、两个 `case`）→ 变绿。本行为的全部知识点讲解在第三节
+「行为 3：超时模式 FetchWithTimeout」。
+
+### 行为 4：WaitGroup 陷阱与 Go 1.25 的 `wg.Go`
+
+| 用例名 | 操作 | 具体断言 |
+|---|---|---|
+| 计数为负 panic | `wg.Add(1)` → `wg.Done()` → 再多调一次 `wg.Done()` | recover 断言第二次多出的 `Done()` panic（`sync: negative WaitGroup counter`） |
+| `wg.Go` 等价手写 Add/Done | 对 3 个任务分别 `wg.Go(func(){...})`，主测试 `wg.Wait()` | Wait 返回后 3 个任务的结果全部可见（缓冲 channel 里 `len == 3`） |
+
+按用例表自己写两个测试：负计数 panic 用 defer+recover 断言（写法见第三节行为 1
+知识点 3）；`wg.Go` 用例用容量为 3 的缓冲 channel 收集任务完成事件，`wg.Wait()`
+返回后断言 `len(done) == 3`。运行 `go test ./tdd/concurrency -race` 应直接全绿。
+本行为的全部知识点讲解在第三节「行为 4：WaitGroup 陷阱与 wg.Go」。
+
+---
+
+## 三、知识点总结
+
+### 行为 1：close 三规则
+
+1. **close 语义速查全表**（本练习的根基，背下来）——完整表格见下方「close 语义
+   速查全表」。原则一句话：**关闭是发送方的职责**，接收方靠 ok-idiom 或
+   `for range` 感知关闭，绝不反过来（接收方一 close，发送方下次发送就 panic）。
 2. **ok-idiom 与 map 取值的统一感**：`v, ok := <-ch` 和 `v, ok := m[k]`、
    `v, ok := x.(T)`（类型断言）完全同构——comma-ok 是 Go 通用的"拿到了吗"协议。
    差异只在语义：map 的 `false` 表示 key 不存在；channel 的 `false` 表示"已关闭
@@ -157,82 +176,24 @@ defer func() {
    "无人接收导致阻塞"这条干扰路径。设计测试时要想清楚：除了被测机制，还有没有别的
    路径能产生同样的现象。
 
-### 行为 2：无缓冲 channel 的同步语义——证明发送方会一直阻塞
-
-| 用例（场景） | 操作序列 | 具体断言 |
-|---|---|---|
-| 接收方就绪前，发送一直阻塞 | goroutine 执行 `ch <- "x"` 后 `close(sent)`；主测试**故意不接收** | select `sent` vs `time.After(50ms)`：必须走到 time.After 分支（50ms 内 sent 未被 close） |
-| 接收之后，发送立刻完成 | 主测试 `<-ch` 收到 `"x"`，然后再次 select | 必须走到 `sent` 分支（接收后发送方立即解除阻塞；超时保险放宽到 1s） |
-
-骨架如下，**两个 select 按用例表自己写**：
-
-```go
-func TestUnbufferedChannelBlocksUntilReceived(t *testing.T) {
-	ch := make(chan string)     // 无缓冲
-	sent := make(chan struct{}) // 观察"发送是否已完成"的事件 channel
-
-	go func() {
-		ch <- "x"
-		close(sent) // 只有值被取走后才执行得到
-	}()
-
-	// 第一幕：还没人接收——select sent vs time.After(50ms)，必须超时
-
-	// 第二幕：<-ch 接收并断言值为 "x"——再 select，sent 必须就绪
-}
-```
-
-**这一步用到的知识点：**
+### 行为 2：无缓冲 channel 的同步语义
 
 1. **无缓冲 channel 是会合点（rendezvous）**：发送方和接收方必须同时到场才成交；
-   值被取走之前，发送方一直阻塞。本测试正是利用这一点——`close(sent)` 的执行时机
-   就是"阻塞解除"的可观察证据。对照缓冲 channel：只要缓冲有空位，发送立即返回，
-   发送方**不知道**值何时被取走。
+   值被取走之前，发送方一直阻塞。行为 2 的测试正是利用这一点——`close(sent)` 的
+   执行时机就是"阻塞解除"的可观察证据。对照缓冲 channel：只要缓冲有空位，发送
+   立即返回，发送方**不知道**值何时被取走。
 2. **并发测试的核心手法：把内部状态变成 channel 事件**。测试无法直接断言"某
    goroutine 正在阻塞"，只能观察副作用。这里用第二个 channel `sent` 把"发送完成"
    变成可被 select 捕获的事件——以后所有并发测试都是这个思路。
-3. **正/负断言的超时取舍**：断言"不该发生"（第一幕）用短超时 50ms——等再久也不该
-   发生，50ms 已远超调度延迟；断言"必须发生"（第二幕）用宽松超时（1s）——正常路径
+3. **正/负断言的超时取舍**：断言"不该发生"用短超时（如 50ms）——等再久也不该
+   发生，50ms 已远超调度延迟；断言"必须发生"用宽松超时（如 1s）——正常路径
    立即通过，长超时只是 CI 抖动保险，不拖慢测试。方向用反了，测试要么慢要么抖。
 4. **内存模型依据（happens-before）**：channel 上的发送 happens-before 对应的接收
    完成；对无缓冲 channel，接收完成又 happens-before 发送方解除阻塞。正是这两条保证
    接收方能读到发送方写入的数据、发送方能确定值已被取走——它也是 `-race` 判定数据
    竞争用的那把尺子。
 
-### 行为 3：超时模式 `FetchWithTimeout`（本练习的 RED 在这里）
-
-| 用例名 | ch 的行为 | d | 期望返回 |
-|---|---|---|---|
-| 超时返回零值和 false | goroutine 50ms 后才发送 `"late"` | `10 * time.Millisecond` | `("", false)` |
-| 时限内取到值 | goroutine 50ms 后才发送 `"late"` | `1 * time.Second` | `("late", true)` |
-
-骨架如下，**表驱动两行用例按上表自己补**：
-
-```go
-// 辅助：返回一个 delay 后才产出 v 的 channel
-func slowCh(delay time.Duration, v string) chan string {
-	ch := make(chan string)
-	go func() {
-		time.Sleep(delay)
-		ch <- v
-	}()
-	return ch
-}
-
-func TestFetchWithTimeout(t *testing.T) {
-	// 表驱动：建议字段 delay / d / want / wantOK，按用例表写两行
-	// 循环里调用 FetchWithTimeout(slowCh(c.delay, "late"), c.d) 并断言两个返回值
-}
-```
-
-加菜（可选）：超时用例里记录调用前后时刻，断言耗时明显小于 50ms——证明它确实
-在 10ms 超时返回，而不是傻等值到达。
-
-步骤：先写测试 → `go test ./tdd/concurrency -run TestFetchWithTimeout` → **编译失败
-`undefined: FetchWithTimeout`，这就是 RED** → 新建 `timeout.go`，按契约写最少实现
-（一个 `select`、两个 `case`）→ 变绿。
-
-**这一步用到的知识点：**
+### 行为 3：超时模式 FetchWithTimeout
 
 1. **`select` 的语义**：所有 case 一起等，谁先就绪执行谁；多个同时就绪**随机**选一个；
    都不就绪则阻塞（有 `default` 则立即走 default）。`time.After(d)` 返回一个
@@ -251,45 +212,7 @@ func TestFetchWithTimeout(t *testing.T) {
    或 done 信号）在 `tdd/pipeline` 练。先建立直觉：**每次超时都可能留下一个没救的
    goroutine**。
 
-### 行为 4：WaitGroup 陷阱与 Go 1.25 的 `wg.Go`
-
-| 用例名 | 操作 | 具体断言 |
-|---|---|---|
-| 计数为负 panic | `wg.Add(1)` → `wg.Done()` → 再多调一次 `wg.Done()` | recover 断言第二次多出的 `Done()` panic（`sync: negative WaitGroup counter`） |
-| `wg.Go` 等价手写 Add/Done | 对 3 个任务分别 `wg.Go(func(){...})`，主测试 `wg.Wait()` | Wait 返回后 3 个任务的结果全部可见（缓冲 channel 里 `len == 3`） |
-
-骨架如下，**断言按用例表自己补**：
-
-```go
-func TestWaitGroupNegativeCounterPanics(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	wg.Done()
-
-	defer func() {
-		if recover() == nil {
-			t.Error("计数为负没有 panic")
-		}
-	}()
-	wg.Done() // 期望 panic：sync: negative WaitGroup counter
-}
-
-func TestWaitGroupGoEquivalentToAddDone(t *testing.T) {
-	var wg sync.WaitGroup
-	done := make(chan struct{}, 3) // 缓冲 = 任务数，goroutine 不会卡在发送上
-
-	for i := 0; i < 3; i++ {
-		wg.Go(func() { // Go 1.25 新 API；可另写一版 Add(1)+go+defer Done() 对照
-			done <- struct{}{}
-		})
-	}
-	wg.Wait()
-
-	// 断言 len(done) == 3
-}
-```
-
-**这一步用到的知识点：**
+### 行为 4：WaitGroup 陷阱与 wg.Go
 
 1. **WaitGroup 是计数器**：`Add(n)` 加 n、`Done()` 减 1、`Wait()` 阻塞到计数归零。
    `Done()` 多于 `Add` → 计数为负 → panic（`sync: negative WaitGroup counter`）。
@@ -297,17 +220,13 @@ func TestWaitGroupGoEquivalentToAddDone(t *testing.T) {
 2. **Add 的位置陷阱**：`Add` 必须在**启动 goroutine 之前**调用。先 `go` 后 `Add`，
    `Wait` 可能在 `Add` 之前就把计数看成 0、提前返回——这是**逻辑竞态，不是数据
    竞争，`-race` 抓不到**。所以惯用法是在循环里 `wg.Add(1)` 紧挨 `go` 之前。
-3. **Go 1.25 的 `wg.Go(f)`**：语义等价于 `wg.Add(1); go func(){ defer wg.Done(); f() }()`。
+3. **Go 1.25 的 `wg.Go(f)`**：语义近似于 `wg.Add(1); go func(){ defer wg.Done(); f() }()`。
    它把 Add/Done 的配对责任收进一个调用：不可能忘记 Add（启动即计数）、不可能忘记
-   Done（defer 内置）、任务内 panic 也不会漏掉 Done——两类最常见的不匹配错误从机制
-   上消失。对照 [basic/goroutine.go 的手写推荐写法](../../basic/goroutine.go#L32)。
+   Done（defer 内置）。但 `f` 仍不应 panic；官方契约要求传入的函数不 panic，`wg.Go`
+   不是 panic 恢复机制。对照 [basic/goroutine.go 的手写推荐写法](../../basic/goroutine.go#L32)。
 4. **Wait 建立 happens-before**：各 goroutine 在 `Done` 之前的所有写，对 `Wait`
    返回之后的读可见——所以 Wait 之后直接读结果（比如 `len(done)`）不需要再加锁。
-   这正是本测试能在 `-race` 下通过的原理。
-
----
-
-## 三、知识点总结
+   这正是行为 4 的测试能在 `-race` 下通过的原理。
 
 ### close 语义速查全表
 
@@ -330,7 +249,7 @@ func TestWaitGroupGoEquivalentToAddDone(t *testing.T) {
 
 ### 超时 vs 取消（一句话对比）
 
-- 超时（`time.After`）：**被动闹钟**——到期前不可叫停，timer 触发前不被 GC
+- 超时（`time.After`）：**被动闹钟**——到期前不可叫停；如果需要主动停止或复用，优先使用可 Stop 的 `time.Timer`
 - 取消（`context`）：**主动信号**——随时可停，沿调用树传播 → 留给 `tdd/context`
 
 ### WaitGroup 速查

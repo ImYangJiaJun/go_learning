@@ -5,19 +5,16 @@
 TCP 三段模型 vs UDP 无连接模型、字节流 vs 数据报的边界差异、并发服务器的 `-race` 验证。
 
 > 本任务是**机制学习型**练习：接口契约已固定，不要花时间在 API 设计上。
-> 用法：第一节看需求；第二节边做边学——每个行为下面附有这一步要用到的知识点讲解；
-> 第三节是知识点总结，做完后对照自查。
+> 用法：第一节看需求规格（接口契约固定，照此实现）；第二节是纯任务单——只给行为目标、
+> 用例表和验收命令，测试代码全部自己写；第三节是知识点讲解，做之前通读或卡壳时查阅，做完后对照自查。
 
 ---
 
 ## 一、需求规格
 
-### 这个包要做什么
+### 核心功能
 
-**没有 `main` 函数。** 本练习的产出物不是可执行程序，而是一个被测试验证的包——
-`go test ./tdd/tcpudp` 就是它的运行方式，验收者是测试，不是人。
-
-这个包对外只提供两个能力：
+实现两个 **echo 服务器启动函数**，这个包对外只提供这两个能力：
 
 - **启动一个 TCP echo 服务器**：接受连接后，把从连接里读到的数据原样写回
 - **启动一个 UDP echo 服务器**：把收到的每个数据报原样写回发送方
@@ -25,17 +22,48 @@ TCP 三段模型 vs UDP 无连接模型、字节流 vs 数据报的边界差异�
 两个函数都返回真实监听地址和一个关闭函数——测试可以"启动 → 通信 → 关闭"全程自助，
 不需要人去指定端口、启动进程。
 
+**没有 `main` 函数。** 本练习的产出物不是可执行程序，而是一个被测试验证的包——
+`go test ./tdd/tcpudp` 就是它的运行方式，验收者是测试，不是人。
+
 服务器内部必然有 goroutine（accept 循环 + 每条连接的处理循环），所以本练习
 **全部测试要求 `-race` 通过**。
 
-### 文件计划（共 2 个文件）
+### 调用关系（谁在调用谁）
 
-| 文件 | 里面写什么 | 什么时候建 |
-|---|---|---|
-| `echo_test.go` | 全部测试（TCP 往返 / UDP 往返 / 关闭语义） | **第 1 个建** |
-| `echo.go` | `StartTCPEcho` / `StartUDPEcho`（仅有的两个要实现函数） | 测试编译报错时 |
+```text
+测试代码 ──► StartTCPEcho() ──► addr ──► net.Dial("tcp", addr) ⇄ TCP 服务器
+测试代码 ──► StartUDPEcho() ──► addr ──► WriteToUDP / ReadFromUDP ⇄ UDP 服务器
+测试代码 ──► shutdown() ──► 关闭监听器、释放端口（之后 Dial 该地址被拒绝）
+```
+
+服务器内部的 accept 循环和 goroutine 对测试完全不可见——测试只通过 `addr` 和
+`shutdown` 两个返回值与服务器交互，这正是"只验证外部行为、不检查实现细节"的练法。
+
+### 文件计划（共 2 个文件，按编号顺序建）
+
+最终目录长这样：
+
+```text
+tdd/tcpudp/
+├── echo_test.go    # 全部测试（TCP 往返 / UDP 往返 / 关闭语义）
+└── echo.go         # 两个 echo 服务器启动函数（本练习仅有的两个要实现函数）
+```
+
+| # | 文件 | 这个文件是干什么的 | 里面要写的符号 | 什么时候建 |
+|---|---|---|---|---|
+| 1 | `echo_test.go` | 全部测试：TCP 往返、UDP 往返、关闭语义 | `TestTCPEcho`、`TestUDPEcho`、`TestTCPEchoShutdown` | **第 1 个建**（行为 2、3 往里追加测试） |
+| 2 | `echo.go` | 两个 echo 服务器的启动函数 | `StartTCPEcho`、`StartUDPEcho` | 测试编译报错时 |
+
+要写的函数一共 2 个，就是下面契约里的全部，一个不多一个不少。
 
 ### 接口契约（固定，按此实现，名字不要改）
+
+完备性原则：**你要写的每一个签名都在下面**；本练习不定义任何类型、常量或哨兵错误——
+地址就是 `string`，关闭动作就是 `func()`，错误直接透传标准库的 `error`。
+你唯一需要自己实现的是函数体（accept 循环、goroutine 都是函数体内部的事）；
+如果写代码时发现要发明契约之外的类型或函数，说明走偏了。
+
+**写在 `echo.go`：**（需要 `import "net"` 和 `"io"`）
 
 ```go
 package tcpudp
@@ -43,7 +71,7 @@ package tcpudp
 // StartTCPEcho 在本机回环地址的随机空闲端口上启动一个 TCP echo 服务器：
 // 接受连接后，把从连接中读到的数据原样写回（echo）。
 // addr 是服务器的真实监听地址（形如 "127.0.0.1:54321"），供测试 Dial 使用；
-// shutdown 关闭监听器、释放端口；启动失败时 err 非 nil。
+// shutdown 关闭监听器、释放端口（之后再 Dial 该地址会被拒绝）；启动失败时 err 非 nil。
 func StartTCPEcho() (addr string, shutdown func(), err error)
 
 // StartUDPEcho 语义同上，但基于 UDP：
@@ -51,86 +79,56 @@ func StartTCPEcho() (addr string, shutdown func(), err error)
 func StartUDPEcho() (addr string, shutdown func(), err error)
 ```
 
-### 第一步：手把手起步
+**契约核对清单**（写完代码后数一遍，应一个不少）：
 
-1. 在 `tdd/tcpudp/` 下新建 `echo_test.go`，写入（行为 1 的完整测试，可直接粘贴）：
-
-```go
-package tcpudp
-
-import (
-	"net"
-	"testing"
-	"time"
-)
-
-func TestTCPEcho(t *testing.T) {
-	addr, shutdown, err := StartTCPEcho()
-	if err != nil {
-		t.Fatalf("启动服务器失败：%v", err)
-	}
-	defer shutdown()
-
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		t.Fatalf("连接服务器失败：%v", err)
-	}
-	defer conn.Close()
-	// 网络测试必须防止"服务器没回应，测试永远挂着"
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-
-	buf := make([]byte, 1024)
-
-	// 第一次往返：写 hello，读回应相等
-	if _, err := conn.Write([]byte("hello")); err != nil {
-		t.Fatalf("写入失败：%v", err)
-	}
-	n, err := conn.Read(buf)
-	if err != nil {
-		t.Fatalf("读取失败：%v", err)
-	}
-	if got := string(buf[:n]); got != "hello" {
-		t.Errorf("第一次往返：期望 %q，得到 %q", "hello", got)
-	}
-
-	// 第二次往返：同一条连接可复用
-	if _, err := conn.Write([]byte("world")); err != nil {
-		t.Fatalf("第二次写入失败：%v", err)
-	}
-	n, err = conn.Read(buf)
-	if err != nil {
-		t.Fatalf("第二次读取失败：%v", err)
-	}
-	if got := string(buf[:n]); got != "world" {
-		t.Errorf("第二次往返：期望 %q，得到 %q", "world", got)
-	}
-}
-```
-
-2. 运行 `go test ./tdd/tcpudp` → **编译失败**：`undefined: StartTCPEcho`。这就是 RED——
-   测试描述了你想要但还不存在的函数（编译失败同样算 RED，见 [tdd/testbasic](../testbasic/README.md) 行为 1）。
-3. 新建 `echo.go`，写**最少**的实现让测试变绿。实现提示（骨架，不是完整答案）：
-   - `net.Listen("tcp", "127.0.0.1:0")` 拿到 Listener，失败直接返回 err
-   - 起一个 goroutine 跑 accept 循环：`Accept()` 出错（监听器被关闭）就退出循环
-   - 每条连接再起一个 goroutine：echo 的核心只有一行——`io.Copy(conn, conn)`
-     （把从 conn 读到的写回 conn），goroutine 退出前 `conn.Close()`
-   - 返回三件套：`ln.Addr().String()`、关闭函数 `func() { ln.Close() }`、`nil`
-4. 再跑 `go test ./tdd/tcpudp` → 绿。第一轮 RED → GREEN 完成。
+- 2 个函数：`StartTCPEcho`、`StartUDPEcho`
+- 0 个类型、0 个哨兵错误：全部使用标准库类型，不要自己发明
 
 ---
 
-## 二、任务单（边做边学）
+## 二、任务单
 
 ### 行为 1：TCP 往返——写读相等，连接可复用
 
-完整测试代码已在第一节「第一步：手把手起步」给出，它覆盖下面两条用例：
+在 `echo_test.go` 里写 `TestTCPEcho`，覆盖下面两条用例。**测试自己写**：
+先写测试，编译失败（`undefined: StartTCPEcho`）即 RED，再写最少实现变绿。
 
 | 用例名 | 输入 | 期望 |
 |---|---|---|
 | 第一次往返 | `conn.Write("hello")` 后 `conn.Read` | 读回 `"hello"` |
 | 连接复用第二次往返 | **同一条 conn** 再 `Write("world")` 后 `Read` | 读回 `"world"` |
 
-**这一步用到的知识点：**
+### 行为 2：UDP 往返——无连接，每次操作都带地址
+
+在 `echo_test.go` 里新增 `TestUDPEcho`，覆盖下面用例。**测试自己写**：
+先写测试，编译失败即 RED，再写最少实现变绿。
+
+| 用例名 | 输入 | 期望 |
+|---|---|---|
+| 数据报往返 | `WriteToUDP("ping", 服务器地址)` 后 `ReadFromUDP` | 读回 `"ping"`，且来源地址 == 服务器地址 |
+| 第二个数据报 | 同一 socket `WriteToUDP("pong", 服务器地址)` 后 `ReadFromUDP` | 读回 `"pong"` |
+
+UDP 不需要 Dial：客户端自己 `net.ListenUDP` 拿一个随机端口的 socket；
+发送前先用 `net.ResolveUDPAddr` 把服务器地址字符串解析成 `*net.UDPAddr`。
+实现 `StartUDPEcho` 的提示：`net.ListenUDP("udp", ...)` 直接得到 `*net.UDPConn`，
+起一个 goroutine 循环 `ReadFromUDP` → 按来源地址 `WriteToUDP` 写回即可，没有 accept。
+
+### 行为 3：关闭语义——shutdown 后连接被拒绝
+
+新增 `TestTCPEchoShutdown`，覆盖下面用例。**测试自己写**：
+先写测试，编译失败即 RED，再写最少实现变绿。
+
+| 用例名 | 操作 | 期望 |
+|---|---|---|
+| 关闭后拒绝连接 | `StartTCPEcho()` → `shutdown()` → `net.Dial("tcp", addr)` | Dial 返回的 `err` 非 nil |
+
+注意：这个测试里不能 `defer shutdown()`——要主动调它，才能验证关闭语义。
+
+---
+
+## 三、知识点总结
+
+### 行为 1：TCP 往返——写读相等，连接可复用
 
 1. **为什么测试用 `127.0.0.1:0`**：端口号写 0 是告诉内核"从临时端口池里分配一个当前空闲的端口"，
    监听成功后通过 `ln.Addr()`（本契约里就是返回的 `addr`）拿到真实地址。对比写死 `8080`：
@@ -154,43 +152,6 @@ func TestTCPEcho(t *testing.T) {
    网络测试的铁律：**宁可超时失败，不可无限等待。**
 
 ### 行为 2：UDP 往返——无连接，每次操作都带地址
-
-在 `echo_test.go` 里新增 `TestUDPEcho`，覆盖下面用例。**测试自己写**，骨架如下：
-
-| 用例名 | 输入 | 期望 |
-|---|---|---|
-| 数据报往返 | `WriteToUDP("ping", 服务器地址)` 后 `ReadFromUDP` | 读回 `"ping"`，且来源地址 == 服务器地址 |
-| 第二个数据报 | 同一 socket `WriteToUDP("pong", 服务器地址)` 后 `ReadFromUDP` | 读回 `"pong"` |
-
-```go
-func TestUDPEcho(t *testing.T) {
-	addr, shutdown, err := StartUDPEcho()
-	if err != nil {
-		t.Fatalf("启动服务器失败：%v", err)
-	}
-	defer shutdown()
-
-	serverAddr, err := net.ResolveUDPAddr("udp", addr)
-	if err != nil {
-		t.Fatalf("解析地址失败：%v", err)
-	}
-
-	// UDP 不需要 Dial：客户端自己 ListenUDP 拿一个随机端口的 socket
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
-	if err != nil {
-		t.Fatalf("创建客户端 socket 失败：%v", err)
-	}
-	defer conn.Close()
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-
-	// 按用例表补齐：WriteToUDP 发送 → ReadFromUDP 接收，校验内容和来源地址
-}
-```
-
-实现 `StartUDPEcho` 的提示：`net.ListenUDP("udp", ...)` 直接得到 `*net.UDPConn`，
-起一个 goroutine 循环 `ReadFromUDP` → 按来源地址 `WriteToUDP` 写回即可，没有 accept。
-
-**这一步用到的知识点：**
 
 1. **listen / dial / accept 三段模型（TCP）**：socket 编程的经典三段，分工明确——
    `net.Listen` 创建的 Listener 是"前台接待"，本身不传数据，只负责等连接（三次握手由内核协议栈
@@ -225,27 +186,6 @@ func TestUDPEcho(t *testing.T) {
 
 ### 行为 3：关闭语义——shutdown 后连接被拒绝
 
-新增 `TestTCPEchoShutdown`，覆盖下面用例。**测试自己写**，骨架如下：
-
-| 用例名 | 操作 | 期望 |
-|---|---|---|
-| 关闭后拒绝连接 | `StartTCPEcho()` → `shutdown()` → `net.Dial("tcp", addr)` | Dial 返回的 `err` 非 nil |
-
-```go
-func TestTCPEchoShutdown(t *testing.T) {
-	addr, shutdown, err := StartTCPEcho()
-	if err != nil {
-		t.Fatalf("启动服务器失败：%v", err)
-	}
-	// 注意：这里不能 defer shutdown()——我们要主动调它，验证关闭语义
-	shutdown()
-
-	// 按用例表补齐：Dial 应当失败
-}
-```
-
-**这一步用到的知识点：**
-
 1. **关闭语义 = 资源释放的可观测证明**：`shutdown()` 内部调用 `listener.Close()`，内核随即释放端口；
    此后再 `Dial` 这个地址，内核直接回 RST 包，Dial 立即返回"连接被拒绝"错误。测试用"Dial 失败"
    这个**外部可观测行为**断言"端口已释放"这个内部状态——这正是 TDD 的核心思想：不检查实现细节，
@@ -259,10 +199,6 @@ func TestTCPEchoShutdown(t *testing.T) {
 4. **UDP 为什么没有这条用例**：UDP 无连接，没有"拒绝连接"的语义——shutdown 后往已关闭的端口发
    数据报，只是没人接收，客户端 `Read` 一直等到超时。"连接被拒绝"是 TCP 面向连接模型独有的行为，
    对比之下更能体会两个模型的差异。
-
----
-
-## 三、知识点总结
 
 ### `net` 包 API 速查
 

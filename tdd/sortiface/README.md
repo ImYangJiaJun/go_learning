@@ -6,8 +6,9 @@
 以及 Go 1.21 泛型时代的新写法。
 
 > 本任务是**机制学习型**练习：接口契约已固定，不要花时间在 API 设计上。
-> 用法：第一节看需求；第二节边做边学——每个行为下面附有这一步要用到的知识点讲解；
-> 第三节是知识点总结，做完后对照自查。
+> 用法：第一节看需求规格（接口契约固定，照此实现）；第二节是纯任务单——只给行为目标、
+> 用例表和验收命令，测试代码全部自己写；第三节是知识点讲解，做之前通读或卡壳时查阅，
+> 做完后对照自查。
 
 ---
 
@@ -28,14 +29,41 @@
 > 读代码时 `sort.Sort` 到底指谁都分不清。下文凡 `import "sort"` 处，标识符 `sort`
 > 一律指标准库。
 
-### 文件计划（共 2 个文件）
+### 调用关系（谁在调用谁）
 
-| 文件 | 里面写什么 | 什么时候建 |
-|---|---|---|
-| `app_test.go` | 全部测试 | **第 1 个建** |
-| `app.go` | `App` 结构体 + `ByDownloads`/`ByID` 共六个方法 | 测试编译报错时 |
+```text
+测试代码 ──► sort.Sort(ByDownloads(apps)) ──► sort 包内部回调你写的 Len/Less/Swap
+测试代码 ──► sort.Stable(...) / sort.Reverse(...)      同一个接口：换算法承诺 / 加一层包装
+测试代码 ──► sort.Slice / slices.SortFunc（行为 4）    不再定义命名类型，规则写进匿名函数
+```
+
+注意箭头方向：你的代码从不调用排序算法的内部，是标准库**反过来调用**你写的三个方法——
+"能力契约"的字面意思就在这里，这也是本练习要看清的核心机制。
+
+### 文件计划（共 2 个文件，按编号顺序建）
+
+最终目录长这样：
+
+```text
+tdd/sortiface/
+├── app_test.go    # 全部测试（四个行为）
+└── app.go         # App 结构体 + ByDownloads/ByID 两套 sort.Interface 实现
+```
+
+| # | 文件 | 这个文件是干什么的 | 里面要写的符号 | 什么时候建 |
+|---|---|---|---|---|
+| 1 | `app_test.go` | 全部四个行为的测试 | `TestSortByDownloads`、`TestReverseAndByID`、`TestStableKeepsOriginalOrder`、`TestModernSort` | **第 1 个建** |
+| 2 | `app.go` | 数据结构 + 两套排序规则（`sort.Interface` 实现两遍） | `App`、`ByDownloads`、`ByDownloads.Len`、`ByDownloads.Less`、`ByDownloads.Swap`、`ByID`、`ByID.Len`、`ByID.Less`、`ByID.Swap` | 测试编译报错时 |
+
+要实现的方法一共 6 个，就是下面契约里的全部，一个不多一个不少——
+其中 4 个是固定套路（两套 `Len`/`Swap`），有语义的只有 2 个 `Less`。
 
 ### 接口契约（固定，按此实现，名字不要改）
+
+完备性原则：**你要写的每一个类型、每一个签名都在下面**——只有一个实现文件，无需分组。
+你唯一需要自己实现的是方法体；如果写代码时发现要发明契约之外的类型或函数，说明走偏了。
+
+**写在 `app.go`：**（不需要 import 任何包——用到的只有你自己的类型）
 
 ```go
 package sortiface
@@ -62,57 +90,66 @@ func (a ByID) Less(i, j int) bool // ID 小的在前（升序）
 func (a ByID) Swap(i, j int)      // 固定套路
 ```
 
-### 第一步：手把手起步（行为 1 的 RED → GREEN）
+**契约核对清单**（写完代码后数一遍，应一个不少）：
 
-1. 新建 `tdd/sortiface/` 目录，**先只建** `app_test.go`，原样粘贴：
-
-```go
-package sortiface
-
-import (
-	"sort"
-	"testing"
-)
-
-func TestSortByDownloads(t *testing.T) {
-	apps := []App{
-		{ID: 3, Downloads: 500},
-		{ID: 1, Downloads: 1200},
-		{ID: 2, Downloads: 800},
-	}
-	sort.Sort(ByDownloads(apps))
-	want := []App{
-		{ID: 1, Downloads: 1200},
-		{ID: 2, Downloads: 800},
-		{ID: 3, Downloads: 500},
-	}
-	for i := range want {
-		if apps[i] != want[i] {
-			t.Errorf("第 %d 位：期望 %+v，得到 %+v", i, want[i], apps[i])
-		}
-	}
-}
-```
-
-2. 运行 `go test ./tdd/sortiface` → **编译失败**：`undefined: App`、`undefined: ByDownloads`。
-   编译失败同样算 RED——测试描述了你想要但还不存在的代码。
-3. 新建 `app.go`，写**最少**的代码：只写 `App` 结构体和 `ByDownloads` 的三个方法
-   （`ByID` 现在不写——留到行为 2，让测试再驱动一次）。
-4. 再跑 `go test ./tdd/sortiface` → 绿。第一轮 RED → GREEN 完成。
+- 3 个类型：`App`、`ByDownloads`、`ByID`
+- 6 个方法：`ByDownloads.Len`、`ByDownloads.Less`、`ByDownloads.Swap`、`ByID.Len`、`ByID.Less`、`ByID.Swap`
+- 哨兵错误 / 常量：无——本练习不需要
 
 ---
 
-## 二、任务单（边做边学）
+## 二、任务单
 
 ### 行为 1：用 sort.Sort 排出下载量降序
 
-测试代码已在第一节贴出并跑绿。对照用例表确认你理解了每一行：
+第一个行为先把包跑起来：只建 `app_test.go`，按下面用例表自己写 `TestSortByDownloads`，
+跑出 `undefined: App`、`undefined: ByDownloads` 的编译失败——编译失败同样算 RED，
+测试描述了你想要但还不存在的代码；再建 `app.go`，写**最少**的代码：只写 `App` 结构体和
+`ByDownloads` 的三个方法（`ByID` 现在不写——留到行为 2，让测试再驱动一次），
+`go test ./tdd/sortiface` 跑绿，即完成第一轮 RED → GREEN。
 
 | 用例名 | 输入 apps（花括号内是 {ID, Downloads}） | 排序后期望 |
 |---|---|---|
 | 三个应用按下载量降序 | `[{3,500} {1,1200} {2,800}]` | `[{1,1200} {2,800} {3,500}]` |
 
-**这一步用到的知识点：**
+### 行为 2：sort.Reverse 反向 + ByID 第二套规则
+
+按下面用例表自己写 `TestReverseAndByID`（三行用例对应三个子测试），跑出
+`undefined: ByID` 的 RED，再回 `app.go` 补 `ByID` 的三个方法变绿：
+
+| 用例名 | 输入 apps | 操作 | 排序后期望 |
+|---|---|---|---|
+| Reverse 得下载量升序 | `[{1,1200} {3,500} {2,800}]` | `sort.Sort(sort.Reverse(ByDownloads(apps)))` | `[{3,500} {2,800} {1,1200}]` |
+| ByID 升序 | `[{3,500} {1,1200} {2,800}]` | `sort.Sort(ByID(apps))` | `[{1,1200} {2,800} {3,500}]` |
+| Reverse(ByID) 得降序 | `[{3,500} {1,1200} {2,800}]` | `sort.Sort(sort.Reverse(ByID(apps)))` | `[{3,500} {2,800} {1,1200}]` |
+
+### 行为 3：sort.Stable 与排序稳定性
+
+类型都已就位，这个测试能直接编译——按用例表自己写 `TestStableKeepsOriginalOrder`：
+构造两个下载量相同的元素，用 `sort.Stable` 排序后断言它们的相对顺序不变
+（关键断言：ID 1 必须仍在 ID 3 前面）。断言只写 `Stable` 承诺过的事。
+
+| 用例名 | 输入 apps | 操作 | 排序后期望 |
+|---|---|---|---|
+| 同下载量保持原先后顺序 | `[{1,100} {2,300} {3,100}]` | `sort.Stable(ByDownloads(apps))` | `[{2,300} {1,100} {3,100}]`：ID 1 在 ID 3 前 |
+
+### 行为 4：现代写法对照 —— sort.Slice 与 slices 泛型版
+
+不再定义新类型，直接在测试里写匿名比较函数。按用例表自己写 `TestModernSort`
+（四行用例对应子测试，需要新增 `import "slices"` 和 `"cmp"`），先跑红再对照修正到绿：
+
+| 用例名 | 输入 | 操作 | 期望 |
+|---|---|---|---|
+| sort.Slice 降序 | `[{3,500} {1,1200} {2,800}]` | `sort.Slice(apps, func(i, j int) bool { ... })` | `[{1,1200} {2,800} {3,500}]` |
+| 已序校验 | 上一步排好的切片 | `sort.SliceIsSorted(apps, 同一个 less)` | `true` |
+| slices.SortFunc 降序 | `[{3,500} {1,1200} {2,800}]` | `slices.SortFunc(apps, func(a, b App) int { return cmp.Compare(b.Downloads, a.Downloads) })` | `[{1,1200} {2,800} {3,500}]` |
+| slices.Sort 升序 | `[]int{3, 1, 2}` | `slices.Sort(nums)` | `[1, 2, 3]` |
+
+---
+
+## 三、知识点总结
+
+### 行为 1：用 sort.Sort 排出下载量降序
 
 1. **`sort.Interface` 是能力契约**：标准库 `func Sort(data Interface)` 的入参是接口——
    排序算法从头到尾只调用 `Len`/`Less`/`Swap` 三个方法，**完全不知道你的类型是
@@ -141,25 +178,6 @@ func TestSortByDownloads(t *testing.T) {
 
 ### 行为 2：sort.Reverse 反向 + ByID 第二套规则
 
-先写测试（骨架如下，**按用例表自己补全**），跑出 `undefined: ByID` 的 RED，
-再回 `app.go` 补 `ByID` 的三个方法：
-
-```go
-func TestReverseAndByID(t *testing.T) {
-	// 子测试 1：sort.Sort(sort.Reverse(ByDownloads(apps))) → 下载量升序
-	// 子测试 2：sort.Sort(ByID(apps)) → ID 升序
-	// 子测试 3：sort.Sort(sort.Reverse(ByID(apps))) → ID 降序
-}
-```
-
-| 用例名 | 输入 apps | 操作 | 排序后期望 |
-|---|---|---|---|
-| Reverse 得下载量升序 | `[{1,1200} {3,500} {2,800}]` | `sort.Sort(sort.Reverse(ByDownloads(apps)))` | `[{3,500} {2,800} {1,1200}]` |
-| ByID 升序 | `[{3,500} {1,1200} {2,800}]` | `sort.Sort(ByID(apps))` | `[{1,1200} {2,800} {3,500}]` |
-| Reverse(ByID) 得降序 | `[{3,500} {1,1200} {2,800}]` | `sort.Sort(sort.Reverse(ByID(apps)))` | `[{3,500} {2,800} {1,1200}]` |
-
-**这一步用到的知识点：**
-
 1. **`sort.Reverse` 是装饰器（包装器）模式**：`func Reverse(data Interface) Interface`
    返回一个内部类型 `reverse{data}`——它自己的 `Len`/`Swap` 直接转发给被包装者，
    只有 `Less(i, j)` 调的是 `被包装者.Less(j, i)`（下标对调）。**不复制数据、不重写
@@ -169,30 +187,10 @@ func TestReverseAndByID(t *testing.T) {
    类型名叫 `ByDownloads`、业务场景就是排行榜，降序内建在类型里更贴合语义；`Reverse`
    更适合"偶尔需要反着看一眼"的临时需求。
 3. **同一数据、多种排序规则 = 多个命名类型各实现一遍三方法**：`ByDownloads` 和 `ByID`
-   的 `Len`/`Swap` 一字不差，只有 `Less` 不同——样板代码开始显得多余了。记住这种
-   "重复感"，行为 4 会看到现代写法怎么消灭它。
+   的 `Len`/`Swap` 一字不差，只有 `Less` 不同——样板代码开始显得多余了。行为 4 会看到
+   现代写法怎么消灭它。
 
 ### 行为 3：sort.Stable 与排序稳定性
-
-骨架（断言语句自己写）：
-
-```go
-func TestStableKeepsOriginalOrder(t *testing.T) {
-	apps := []App{
-		{ID: 1, Downloads: 100},
-		{ID: 2, Downloads: 300},
-		{ID: 3, Downloads: 100},
-	}
-	sort.Stable(ByDownloads(apps))
-	// 断言：ID 2 排第一；关键断言——ID 1 必须仍在 ID 3 前面
-}
-```
-
-| 用例名 | 输入 apps | 操作 | 排序后期望 |
-|---|---|---|---|
-| 同下载量保持原先后顺序 | `[{1,100} {2,300} {3,100}]` | `sort.Stable(ByDownloads(apps))` | `[{2,300} {1,100} {3,100}]`：ID 1 在 ID 3 前 |
-
-**这一步用到的知识点：**
 
 1. **稳定性的定义**：相等元素在排序后**保持原来的相对顺序**，就是稳定排序。注意"相等"
    由 `Less` 定义而不是 `==`：`Less(i,j)` 和 `Less(j,i)` 都返回 false 时，i、j 视为相等。
@@ -211,26 +209,6 @@ func TestStableKeepsOriginalOrder(t *testing.T) {
    （可作为本练习的扩展用例自己加一条。）
 
 ### 行为 4：现代写法对照 —— sort.Slice 与 slices 泛型版
-
-不再定义新类型，直接在测试里写匿名比较函数。骨架（需要新增 `import "slices"` 和
-`"cmp"`，断言自己补）：
-
-```go
-func TestModernSort(t *testing.T) {
-	// 子测试 1：sort.Slice 按下载量降序 + sort.SliceIsSorted 校验
-	// 子测试 2：slices.SortFunc + cmp.Compare 按下载量降序
-	// 子测试 3：slices.Sort([]int{3, 1, 2}) → [1, 2, 3]
-}
-```
-
-| 用例名 | 输入 | 操作 | 期望 |
-|---|---|---|---|
-| sort.Slice 降序 | `[{3,500} {1,1200} {2,800}]` | `sort.Slice(apps, func(i, j int) bool { ... })` | `[{1,1200} {2,800} {3,500}]` |
-| 已序校验 | 上一步排好的切片 | `sort.SliceIsSorted(apps, 同一个 less)` | `true` |
-| slices.SortFunc 降序 | `[{3,500} {1,1200} {2,800}]` | `slices.SortFunc(apps, func(a, b App) int { return cmp.Compare(b.Downloads, a.Downloads) })` | `[{1,1200} {2,800} {3,500}]` |
-| slices.Sort 升序 | `[]int{3, 1, 2}` | `slices.Sort(nums)` | `[1, 2, 3]` |
-
-**这一步用到的知识点：**
 
 1. **`sort.Slice`（Go 1.8）**：不用定义命名类型，传一个匿名 `less func(i, j int) bool`
    就行——行为 2 里的样板代码（`ByID` 的三个方法）被压缩成一个闭包。代价有两个：
@@ -252,10 +230,6 @@ func TestModernSort(t *testing.T) {
    `slices`（Go 1.21，泛型终结样板）。新代码直接用 `slices`；但读老代码、写需要
    `Reverse` 包装的场景，`sort.Interface` 仍是必备知识——本练习四个行为全覆盖，就是为了
    两代代码都读得懂。
-
----
-
-## 三、知识点总结
 
 ### `sort` 包函数速查
 

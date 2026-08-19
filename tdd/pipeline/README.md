@@ -6,14 +6,13 @@
 被测函数签名全部固定，注意力全部放在 **channel 关闭语义与 goroutine 退出路径**上。
 
 > 本任务是**机制学习型**练习：接口契约已固定，不要花时间在 API 设计上。
-> 用法：第一节看需求；第二节边做边学——每个行为下面附有这一步要用到的知识点讲解；
-> 第三节是知识点总结，做完后对照自查。
+> 用法：第一节看需求规格（接口契约固定，照此实现）；第二节是纯任务单——只给行为目标、用例表和验收命令，测试代码全部自己写；第三节是知识点讲解，做之前通读或卡壳时查阅，做完后对照自查。
 
 ---
 
 ## 一、需求规格
 
-### 这个包要做什么
+### 核心功能
 
 **没有 `main` 函数。** 本练习的产出物不是可执行程序，而是一个被测试验证的包——
 `go test ./tdd/pipeline` 就是它的运行方式，验收者是测试，不是人。
@@ -28,14 +27,41 @@
 
 四个函数共守一条铁律：**收到 `done` 关闭信号后，能立刻停手并关闭自己的输出 channel**。
 
-### 文件计划（共 2 个文件）
+### 调用关系（谁在调用谁）
 
-| 文件 | 里面写什么 | 什么时候建 |
-|---|---|---|
-| `pipeline_test.go` | 全部 4 个行为的测试（行为 4 的限流代码直接写在测试里，是模式演示，不进生产代码） | **第 1 个建** |
-| `pipeline.go` | `gen` / `sq` / `merge` / `workerPool` 四个函数 | 测试编译报错时 |
+```text
+测试代码 ──► gen(done, nums...) ──► sq(done, in) ×2（两路扇出）──► merge(done, out1, out2)    行为 1、2
+测试代码 ──► workerPool(done, jobs, n)                                                        行为 3
+```
+
+四个函数互不调用——它们不是一条写死的调用链，而是由测试组装起来的独立阶段：
+测试是唯一的调用方，数据全靠 channel 在阶段之间流动（jobs 也由测试自己生产并负责关闭）。
+行为 4 的限流模式不进生产代码、不调用这四个函数，整个模式直接写在测试里演示。
+
+### 文件计划（共 2 个文件，按编号顺序建）
+
+最终目录长这样：
+
+```text
+tdd/pipeline/
+├── pipeline_test.go   # 全部 4 个行为的测试（行为 4 的限流代码写在测试里，是模式演示）
+└── pipeline.go        # gen / sq / merge / workerPool 四个函数的实现
+```
+
+| # | 文件 | 这个文件是干什么的 | 里面要写的符号 | 什么时候建 |
+|---|---|---|---|---|
+| 1 | `pipeline_test.go` | 全部 4 个行为的测试（行为 4 的限流代码直接写在测试里，是模式演示，不进生产代码） | `TestPipeline`、`TestPipeline_DoneBroadcast`、`TestWorkerPool`、`TestRateLimit` | **第 1 个建** |
+| 2 | `pipeline.go` | 四个管线函数的全部实现 | `gen`、`sq`、`merge`、`workerPool` | 测试编译报错时 |
+
+要写的函数一共 4 个，就是下面契约里的全部，一个不多一个不少。
 
 ### 接口契约（固定，按此实现，名字不要改）
+
+完备性原则：**你要写的每一个签名都在下面**。本练习不定义类型、没有哨兵错误，
+全部对外符号就是这四个函数。你唯一需要自己实现的是函数体；
+如果写代码时发现要发明契约之外的类型或函数，说明走偏了。
+
+**写在 `pipeline.go`：**（全部实现都在这一个文件里；需要 `import "sync"`——merge 和 workerPool 的 WaitGroup 用到）
 
 ```go
 package pipeline
@@ -61,64 +87,98 @@ func merge(done <-chan struct{}, cs ...<-chan int) <-chan int
 func workerPool(done <-chan struct{}, jobs <-chan int, n int) <-chan int
 ```
 
-### 第一步：手把手起步（行为 1 的测试直接给你当模板）
+**契约核对清单**（写完代码后数一遍，应一个不少）：
 
-1. 在 `tdd/pipeline/` 下新建 `pipeline_test.go`，写入：
-
-```go
-package pipeline
-
-import (
-	"slices"
-	"testing"
-)
-
-// 整条管线：gen 生产 2、3 → 两路 sq 从同一个 channel 扇出 → merge 扇入回一路。
-// 扇出后哪个数走哪条支路由调度器决定，输出顺序不确定——收集后排序再断言。
-func TestPipeline(t *testing.T) {
-	done := make(chan struct{})
-	defer close(done)
-
-	in := gen(done, 2, 3)
-	out1 := sq(done, in)
-	out2 := sq(done, in)
-	out := merge(done, out1, out2)
-
-	var got []int
-	for v := range out {
-		got = append(got, v)
-	}
-	slices.Sort(got)
-
-	want := []int{4, 9}
-	if !slices.Equal(got, want) {
-		t.Errorf("期望 %v，得到 %v", want, got)
-	}
-}
-```
-
-2. 运行 `go test ./tdd/pipeline` → **编译失败**：`undefined: gen`。
-   这就是 RED——测试描述了你想要但还不存在的代码。
-3. 新建 `pipeline.go`，照契约写出让测试通过的**最少代码**
-   （先只实现 gen/sq/merge 三个，`workerPool` 留到行为 3）。
-4. 再跑 `go test ./tdd/pipeline -race` → 绿，行为 1 完成。
-   并发练习从第一轮起就带 `-race` 跑，别等最后才加。
+- 0 个类型：本练习不定义类型，签名里只有 channel 和 `struct{}`
+- 4 个函数：`gen`、`sq`、`merge`、`workerPool`
+- 0 个哨兵错误/常量
 
 ---
 
-## 二、任务单（边做边学）
+## 二、任务单
 
 每个行为 = 一轮完整的 RED → GREEN → REFACTOR，**先把测试写出来再实现**。
 
-### 行为 1：整条管线跑通（测试代码已在第一节给出）
+### 行为 1：整条管线跑通
+
+测试自己写（`TestPipeline`）：组装 `gen(done, 2, 3)` → 两路 `sq(done, in)` →
+`merge(done, out1, out2)`，收集全部输出，`slices.Sort` 后断言等于 `[4, 9]`。
+第一轮编译失败（`undefined: gen`）就是 RED；再到 `pipeline.go` 按契约写最少实现变绿
+（先只实现 gen/sq/merge 三个，`workerPool` 留到行为 3）。并发练习从第一轮起就带 `-race` 跑。
 
 | 用例名 | 输入 | 期望 |
 |---|---|---|
 | 两数平方 | `gen(done, 2, 3)` → 两路 `sq` → `merge` | 收集结果排序后等于 `[4, 9]` |
 
-**这一步用到的知识点：**
+```bash
+go test ./tdd/pipeline -race -run '^TestPipeline$'
+```
 
-1. **扇出（fan-out）与扇入（fan-in）**：扇出 = 多个 goroutine 从**同一个** channel 读数据，把工作分摊下去（本测试里 `out1`、`out2` 两个 sq 都从 `in` 读）；扇入 = 把多个 channel 的数据合并到**同一个** channel（merge）。管线 = 生成器 → 若干阶段（扇出加工）→ 扇入收口。
+### 行为 2：close(done) 广播取消
+
+管线运行中途关闭 done，全管线必须收拢退出。测试自己写（`TestPipeline_DoneBroadcast`）：
+先组装整条管线（`merge(done, sq(done, gen(done, 1, 2, 3, 4, 5)))`）并收到第一个结果
+（证明管线已转动），随后 `close(done)` 广播取消；再用带 `time.After` 看门狗的循环
+继续收 out——out 关闭即全管线退出完毕，1 秒看门狗内没关闭就判失败。
+
+| 用例名 | 操作 | 期望 |
+|---|---|---|
+| 中途取消 | 收到第一个结果后 `close(done)` | out 最终关闭；收集循环在 1 秒看门狗内结束，不死锁 |
+
+```bash
+go test ./tdd/pipeline -race -run TestPipeline_DoneBroadcast
+```
+
+扩展观察（可选）：可以记录 `runtime.NumGoroutine()` 作为诊断日志，但不要用固定 `Sleep(100ms)` 和数量比较作为硬验收条件；调度、测试框架和机器负载都会造成抖动。硬验收应使用 done channel、WaitGroup 或明确的退出信号等待所有 worker 完成。
+
+### 行为 3：worker pool
+
+测试名固定为 `TestWorkerPool`：`done` 照旧 `defer close(done)`；起一个 goroutine 往
+`jobs` 发送 1..100 后 `close(jobs)`（谁生产谁关闭），`workerPool(done, jobs, 4)` 消费；
+收集全部结果——断言恰好 100 个、排序后与期望切片（循环生成 1²..100²）`slices.Equal`，
+且 `for range out` 正常结束（out 被关闭）。
+
+| 用例名 | 输入 | 期望 |
+|---|---|---|
+| 百任务四工人 | jobs 发送 1..100 后 `close(jobs)`，`workerPool(done, jobs, 4)` | 恰好收集到 100 个结果；排序后等于 1²..100²；`for range out` 正常结束（out 被关闭） |
+
+```bash
+go test ./tdd/pipeline -race -run TestWorkerPool
+```
+
+### 行为 4：限流模式（Ticker 节拍器）
+
+测试名 `TestRateLimit`，整个模式写在测试里演示、不进生产代码：`time.NewTicker(20ms)`
+做限速器（`defer ticker.Stop()`）；一个无限量 jobs 供应者 goroutine 用
+`select { case jobs <- i: case <-stop: }` 供应任务（它自己也要有退出路径）；主循环每从
+jobs 收一个任务就先等 `ticker.C` 一拍再计数，`time.After(100ms)` 到点后跳出循环
+（select 套 for，需用标签 break）统计处理次数。
+
+| 用例名 | 设置 | 期望 |
+|---|---|---|
+| 限速生效 | 20ms 一拍的限速器，jobs 无限量供应，观察 100ms 窗口 | 处理次数 `0 < count <= 6`（理论约 5 拍，上限放宽一拍防调度抖动） |
+
+```bash
+go test ./tdd/pipeline -race -run TestRateLimit
+```
+
+### 机制实验（做完行为 1 后必做）
+
+1. 把 `gen` 实现里的 `close(out)` 注释掉，重跑行为 1 → 测试死锁，最终 `panic: test timed out after ...`
+2. 读 panic 输出里的 goroutine dump：能看到 sq、merge 的搬运 goroutine 还阻塞在 channel 接收上，**dump 里直接标着阻塞的行号**——这就是泄漏的现场
+3. 改回来，确认重新变绿
+
+原理：gen 不关闭 out，sq 的 `for range` 永远等下一个值，merge 的 WaitGroup 永远不归零，测试主 goroutine 的 `for range out` 永远阻塞——一行 close 的缺失，拖死整条管线。
+
+---
+
+## 三、知识点总结
+
+任务单各行为涉及的知识点按行为归置如下（做之前通读，或卡壳时按行为查阅）：
+
+### 行为 1：整条管线跑通
+
+1. **扇出（fan-out）与扇入（fan-in）**：扇出 = 多个 goroutine 从**同一个** channel 读数据，把工作分摊下去（行为 1 的测试里 `out1`、`out2` 两个 sq 都从 `in` 读）；扇入 = 把多个 channel 的数据合并到**同一个** channel（merge）。管线 = 生成器 → 若干阶段（扇出加工）→ 扇入收口。
 2. **为什么断言前必须排序——channel 发送是单播**：`in` 里的 2 和 3，每个只会被**一个** sq 拿到（channel 的一个发送值只交付一个接收方）。哪个数走哪条支路、merge 先搬谁，由调度器决定，输出顺序不确定。断言并发结果的集合相等，标准做法就是 `slices.Sort` + `slices.Equal`——**对顺序敏感的断言在并发测试里必然抖动**。
 3. **谁生产谁关闭**：channel 由**发送方**关闭，接收方永远不 close。关闭沿管线一级级传播：gen 发完后 `close(out)` → sq 的 `for range in` 读到关闭、退出循环、close 自己的 out → merge 的两个搬运 goroutine 各自读到关闭 → WaitGroup 归零 → `close(out)` → 测试里的 `for v := range out` 结束。**任何一级忘记关闭，下游的 range 就永远阻塞**——`go test` 卡死直到 `panic: test timed out`（机制实验会让你亲手踩一次）。
 4. **每个发送点都要写 select + done 脚手架**：
@@ -136,39 +196,6 @@ case <-done:     // 被取消：立刻退出
 
 ### 行为 2：close(done) 广播取消
 
-管线运行中途关闭 done，全管线必须收拢退出。骨架如下，**补全 TODO 一行**：
-
-```go
-func TestPipeline_DoneBroadcast(t *testing.T) {
-	done := make(chan struct{})
-	out := merge(done, sq(done, gen(done, 1, 2, 3, 4, 5)))
-
-	<-out // 先收到一个结果，证明管线已经转动
-
-	// TODO：广播取消（一行代码）
-
-	timeout := time.After(time.Second) // 看门狗
-	for {
-		select {
-		case _, ok := <-out:
-			if !ok {
-				return // out 关闭 = 全管线已退出完毕
-			}
-		case <-timeout:
-			t.Fatal("close(done) 后 1 秒内 out 未关闭：有 goroutine 没收到取消信号")
-		}
-	}
-}
-```
-
-| 用例名 | 操作 | 期望 |
-|---|---|---|
-| 中途取消 | 收到第一个结果后 `close(done)` | out 最终关闭；收集循环在 1 秒看门狗内结束，不死锁 |
-
-扩展断言（可选但推荐）：测试开头记 `before := runtime.NumGoroutine()`，结尾 `time.Sleep(100ms)` 后断言 `runtime.NumGoroutine() <= before`——数量回落证明没有泄漏。用 `>` 比较而不是 `!=`：testing 框架自己可能有后台 goroutine，直接判相等容易误伤。
-
-**这一步用到的知识点：**
-
 1. **close 是广播，发送是单播**——本练习最重要的一条机制。`close(ch)` 之后，**所有**正在阻塞等待接收的 goroutine、以及**将来**再执行 `<-ch` 的代码，全部立刻得到零值（`v, ok := <-ch` 中 ok 为 false）。channel 内部维护一个接收等待队列，close 会把队列里的接收方**一次性全部唤醒**——一处 close，全员通知。对比：向 channel **发送**一个值，无论多少接收方在等待，只有**一个**能拿到（单播）。done 模式能成立，靠的就是广播特性。
 2. **为什么不能"向 done 发送一个值"来代替 close**：发送是单播，管线里 gen、sq、merge 搬运工共 N 个 goroutine 在等取消信号，只有一个能收到，其余 N-1 个照常阻塞——泄漏。要发 N 次就得知道 N，而 close 不需要知道。
 3. **done 为什么是 `chan struct{}`**：接收方只关心"关了没有"这个**事件**，根本不读值。`struct{}` 占零字节，是"纯信号"的惯用类型；写 `chan bool` 会让人误以为 true/false 有语义区别——没有，close 后读到的永远是零值。
@@ -177,30 +204,6 @@ func TestPipeline_DoneBroadcast(t *testing.T) {
 
 ### 行为 3：worker pool
 
-| 用例名 | 输入 | 期望 |
-|---|---|---|
-| 百任务四工人 | jobs 发送 1..100 后 `close(jobs)`，`workerPool(done, jobs, 4)` | 恰好收集到 100 个结果；排序后等于 1²..100²；`for range out` 正常结束（out 被关闭） |
-
-骨架（收集与断言自己写）：
-
-```go
-done := make(chan struct{})
-defer close(done)
-
-jobs := make(chan int)
-go func() {
-	for i := 1; i <= 100; i++ {
-		jobs <- i
-	}
-	close(jobs) // 任务发完，生产者负责关闭
-}()
-
-out := workerPool(done, jobs, 4)
-// 收集全部结果 → len 断言 100 → 排序后与期望切片（循环生成 1²..100²）slices.Equal
-```
-
-**这一步用到的知识点：**
-
 1. **worker pool 是扇出/扇入的特化**：固定 n 个消费者从同一个 jobs 读（扇出），结果写同一个 out（扇入）。与 merge 的区别：merge 推广到"任意多个输入 channel"，workerPool 是"固定规模的工人池 + 共享输出"。看清这个对应关系，workerPool 的实现没有任何新魔法。
 2. **两条关闭链，别混**：jobs 由任务生产者关闭（谁生产谁关闭）→ 4 个 worker 的 `for range jobs` 各自读到关闭而退出 → `wg.Wait()` 返回 → workerPool 统一 `close(out)`。**绝不能在某个 worker 里 close(out)**——其余 worker 还在往 out 发送，向已关闭 channel 发送会 panic（close 三规则之一，练习 10 会系统深挖）。
 3. **WaitGroup 的两个铁律**（回顾 [basic/goroutine.go](../../basic/goroutine.go)）：`wg.Add(n)` 必须在**启动 goroutine 之前**完成，否则 Wait 可能提前返回；每个 worker 里 `defer wg.Done()`——panic 也不会漏掉 Done，漏 Done 的 Wait 是死锁。
@@ -208,65 +211,11 @@ out := workerPool(done, jobs, 4)
 
 ### 行为 4：限流模式（Ticker 节拍器）
 
-| 用例名 | 设置 | 期望 |
-|---|---|---|
-| 限速生效 | 20ms 一拍的限速器，jobs 无限量供应，观察 100ms 窗口 | 处理次数 `0 < count <= 6`（理论约 5 拍，上限放宽一拍防调度抖动） |
-
-骨架（断言自己写）：
-
-```go
-func TestRateLimit(t *testing.T) {
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
-
-	stop := make(chan struct{})
-	defer close(stop)
-	jobs := make(chan int)
-	go func() { // 无限量任务供应者——它自己也要有退出路径
-		for i := 0; ; i++ {
-			select {
-			case jobs <- i:
-			case <-stop:
-				return
-			}
-		}
-	}()
-
-	deadline := time.After(100 * time.Millisecond) // 观察窗口的看门狗
-	count := 0
-loop:
-	for {
-		select {
-		case <-jobs:
-			<-ticker.C // 每处理一个任务，先等一拍
-			count++
-		case <-deadline:
-			break loop
-		}
-	}
-	// 断言：0 < count <= 6
-}
-```
-
-**这一步用到的知识点：**
-
 1. **Ticker 与 time.After 的场景差异——周期 vs 一次性**：`time.NewTicker(d)` 每隔 d 往 `C` 送一个时间值，**周而复始**，直到 Stop——适合限速、心跳、定时轮询这类**重复节奏**；`time.After(d)` 只在 d 后送**一次**——适合超时、看门狗、deadline 这类**单次事件**。本测试两者同台：ticker 做限速（周期），deadline 做窗口截止（一次）。选错的典型症状：用 After 做周期任务就得每次重建，用 Ticker 做超时就会在超时后还白白滴答。
 2. **`time.Tick` vs `time.NewTicker`**：`time.Tick(d)` 效果等价于 NewTicker，但**拿不到 Ticker 句柄、永远无法 Stop**。Go 1.23 之前这是硬伤——不 Stop 的 Ticker 连 GC 都不回收，泄漏到程序退出；Go 1.23 起 GC 能回收无引用的 ticker，泄漏问题已消除。但工程里仍推荐 `NewTicker` + `defer ticker.Stop()`：生命周期显式、意图清晰。测试里写 NewTicker，不写 `time.Tick`。
-3. **select 套 for 时的 break 陷阱**：裸 `break` 只跳出 select、跳不出外层 for——上面骨架里的 `break loop` 用了标签语法，正是 [basic/break_continue_goto.go#L38](../../basic/break_continue_goto.go#L38) 的标签 break 在并发场景的实战。
+3. **select 套 for 时的 break 陷阱**：裸 `break` 只跳出 select、跳不出外层 for——要跳出外层循环必须用标签 break（`break loop`），这是 [basic/break_continue_goto.go#L38](../../basic/break_continue_goto.go#L38) 的标签 break 在并发场景的实战。
 4. **时间类断言的哲学：断上不断下，宁可宽松不可抖动**：第 5 拍（100ms 整）能否赶上 deadline 取决于调度，毫秒级抖动客观存在。所以上限放宽一拍（≤6），下限只要求 >0 证明确实在处理。把时间断言写成精确等值（== 5）是最典型的 flaky test 制造法。
-5. **供应者 goroutine 的退出路径**：注意 jobs 供应者用 `select { case jobs <- i: case <-stop: }`——无限循环的 goroutine 同样需要被取消的手段，这本身就是 uber 条目的又一次演练。
-
-### 机制实验（做完行为 1 后必做）
-
-1. 把 `gen` 实现里的 `close(out)` 注释掉，重跑行为 1 → 测试死锁，最终 `panic: test timed out after ...`
-2. 读 panic 输出里的 goroutine dump：能看到 sq、merge 的搬运 goroutine 还阻塞在 channel 接收上，**dump 里直接标着阻塞的行号**——这就是泄漏的现场
-3. 改回来，确认重新变绿
-
-原理：gen 不关闭 out，sq 的 `for range` 永远等下一个值，merge 的 WaitGroup 永远不归零，测试主 goroutine 的 `for range out` 永远阻塞——一行 close 的缺失，拖死整条管线。
-
----
-
-## 三、知识点总结
+5. **供应者 goroutine 的退出路径**：jobs 供应者要用 `select { case jobs <- i: case <-stop: }`——无限循环的 goroutine 同样需要被取消的手段，这本身就是 uber 条目的又一次演练。
 
 ### 管线模式速查
 

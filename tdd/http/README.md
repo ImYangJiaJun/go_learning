@@ -6,8 +6,9 @@ Handler 体系、`httptest` 的单元/集成两种测试层级、状态码语义
 练习里 RWMutex 对照组的实战上岗。
 
 > 本任务是**机制学习型**练习：接口契约已固定，不要花时间在 API 设计上。
-> 用法：第一节看需求；第二节边做边学——每个行为下面附有这一步要用到的知识点讲解；
-> 第三节是知识点总结，做完后对照自查。
+> 用法：第一节看需求规格（接口契约固定，照此实现）；第二节是纯任务单——只给行为目标、
+> 用例表和验收命令，测试代码全部自己写；第三节是知识点讲解，做之前通读或卡壳时查阅，
+> 做完后对照自查。
 
 ---
 
@@ -31,16 +32,49 @@ Handler 体系、`httptest` 的单元/集成两种测试层级、状态码语义
 3. **没实现的方法**（如 `DELETE /users/{id}`）→ 405
 4. **每个请求**打一行 `slog` 结构化日志（method、path、status）
 
-### 文件计划（共 4 个文件，分四次建）
+### 调用关系（谁在调用谁）
 
-| 文件 | 里面写什么 | 什么时候建 |
-|---|---|---|
-| `server_test.go` | 行为 1、2、3、5 的全部测试（单元级，Recorder） | **第 1 个建** |
-| `server.go` | `User`、`NewServer`、路由与 handler、`map + sync.RWMutex` 存储 | 测试编译报错时 |
-| `integration_test.go` | 行为 4 的集成测试（`httptest.NewServer` 起真实端口） | 行为 4 开始时 |
-| `logging.go` | 行为 5 的日志中间件 | 行为 5 测试变红时 |
+```text
+单元测试 ──► server.ServeHTTP(rec, req)            进程内函数调用，无网络、无端口
+集成测试 ──► http.Get(ts.URL + "/users/1") ──► 真实 TCP 端口
+                      │
+                      ▼
+            loggingMiddleware ──► ServeMux 路由 ──► handler ──► map + RWMutex
+            （行为 5 起每个请求先过它：记状态码、打日志）
+```
+
+两种测试层级喂的是**同一个** `NewServer()` 返回值——这就是契约"返回 `http.Handler`
+而不是启动服务"的原因：单元级直接调 `ServeHTTP`，集成级交给 `httptest.NewServer` 起真实端口。
+
+### 文件计划（共 4 个文件，按编号顺序建）
+
+最终目录长这样：
+
+```text
+tdd/http/
+├── server_test.go       # 行为 1、2、3、5 的单元测试（Recorder，无网络）
+├── server.go            # 数据结构、路由与 handler、map + sync.RWMutex 存储
+├── integration_test.go  # 行为 4 的集成测试（httptest.NewServer 起真实端口）
+└── logging.go           # 行为 5 的日志中间件
+```
+
+| # | 文件 | 这个文件是干什么的 | 里面要写的符号 | 什么时候建 |
+|---|---|---|---|---|
+| 1 | `server_test.go` | 行为 1、2、3、5 的全部单元测试（Recorder） | `postUser`、`TestGetUser`、`TestRequestLog`（行为 2、3 的测试名自定） | **第 1 个建** |
+| 2 | `server.go` | 用户数据结构、路由与 handler、内存存储（本练习的核心） | `User`、`NewServer` | 测试编译报错时 |
+| 3 | `integration_test.go` | 行为 4 的集成测试：真实端口全流程 | `TestIntegration` | 行为 4 开始时 |
+| 4 | `logging.go` | 行为 5 的日志中间件：包装 Handler、捕获状态码 | `statusRecorder`、`statusRecorder.WriteHeader`、`loggingMiddleware` | 行为 5 测试变红时 |
+
+要写的符号一共 5 个，就是下面契约里的全部，一个不多一个不少；
+路由 handler 是写在 `NewServer` 体内的闭包，不算独立符号。
 
 ### 接口契约（固定，按此实现，名字不要改）
+
+完备性原则：**你要写的每一个类型、每一个签名都在下面**，按文件分组。
+你唯一需要自己实现的是函数体（含 `NewServer` 体内的路由 handler 闭包）；
+如果写代码时发现要发明契约之外的类型或函数，说明走偏了。
+
+**写在 `server.go`：**（需要 `import "encoding/json"`、`"net/http"`、`"strconv"`、`"sync"`）
 
 ```go
 package httplab
@@ -67,94 +101,122 @@ type User struct {
 //	                   非法 JSON → 400
 //	其他方法（如 DELETE /users/{id}）→ 405（由路由自动产生，行为 3 锁定它）
 //
-// 每个请求打一行 slog 结构化日志（method、path、status）；此条到行为 5 才有测试验收。
+// 每个请求打一行 slog 结构化日志（method、path、status）：由 logging.go 的
+// loggingMiddleware 提供，装配时包在 mux 外面；此条到行为 5 才有测试验收。
 func NewServer() http.Handler
 ```
 
-### 第一步：手把手起步（行为 1 的测试直接给你当模板）
-
-1. 在 `tdd/http/` 下新建 `server_test.go`，写入：
+**写在 `logging.go`：**（需要 `import "log/slog"`、`"net/http"`）
 
 ```go
-package httplab
-
-import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-)
-
-// postUser 是测试的"布置"助手：通过 POST 接口预存一个用户。
-// 在行为 2 之前，POST 本身还没有测试——这里只把它当准备工作用。
-func postUser(t *testing.T, server http.Handler, body string) {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/users", strings.NewReader(body))
-	rec := httptest.NewRecorder()
-	server.ServeHTTP(rec, req)
+// statusRecorder 嵌入 http.ResponseWriter、重写 WriteHeader 把状态码记下再透传——
+// ResponseWriter 接口只进不出，状态码只能靠包装捕获。
+// status 默认记 200：handler 只写 body 不调 WriteHeader 时就是 200。
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
 }
 
-func TestGetUser(t *testing.T) {
-	server := NewServer()
-	postUser(t, server, `{"id":1,"name":"Tom","age":20}`)
+// 记下 code，再调内层 ResponseWriter 的 WriteHeader 透传
+func (r *statusRecorder) WriteHeader(code int)
 
-	t.Run("存在的用户返回200和JSON", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/users/1", nil)
-		rec := httptest.NewRecorder()
-
-		server.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("期望状态码 200，得到 %d", rec.Code)
-		}
-		if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
-			t.Errorf("期望 Content-Type 是 application/json，得到 %q", ct)
-		}
-		var got User
-		if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-			t.Fatalf("响应体不是合法 JSON：%v", err)
-		}
-		if got.ID != 1 || got.Name != "Tom" || got.Age != 20 {
-			t.Errorf("期望 Tom（id=1, age=20），得到 %+v", got)
-		}
-	})
-
-	t.Run("不存在的用户返回404", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/users/99", nil)
-		rec := httptest.NewRecorder()
-
-		server.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("期望状态码 404，得到 %d", rec.Code)
-		}
-	})
-}
+// loggingMiddleware 是中间件的标准形态 func(http.Handler) http.Handler：
+// 用 statusRecorder 包住 w → 调 next.ServeHTTP → 出来后 slog.Info 打一行
+// （消息 "request"，键 method、path、status；status 取自 statusRecorder）
+func loggingMiddleware(next http.Handler) http.Handler
 ```
 
-2. 运行 `go test ./tdd/http` → **编译失败**：`undefined: NewServer`（还有 `undefined: User`）。
-   这就是 RED —— 测试描述了你想要但还不存在的代码。
-3. 新建 `server.go`，照契约写出让测试通过的**最少代码**。提示：`http.NewServeMux`、
-   `mux.HandleFunc("GET /users/{id}", h)`、`r.PathValue("id")` 配 `strconv.Atoi`、
-   `json.NewEncoder(w).Encode(u)`。注意：POST 此刻只是 arrange 工具，存进 map 即可，
-   它的状态码对不对还没有人管——行为 2 会来收拾它。
-4. 再跑 `go test ./tdd/http` → 全绿，行为 1 完成。
+**契约核对清单**（写完代码后数一遍，应一个不少）：
+
+- 2 个类型：`User`、`statusRecorder`
+- 3 个函数/方法：`NewServer`、`statusRecorder.WriteHeader`、`loggingMiddleware`
+- 2 条路由：`GET /users/{id}`、`POST /users`（405 是 ServeMux 自动行为，不算第三条路由）
 
 ---
 
-## 二、任务单（边做边学）
+## 二、任务单
 
 每个行为 = 一轮完整的 RED → GREEN → REFACTOR，**先把测试写出来再实现**。
 
-### 行为 1：按 id 查用户（测试代码已在第一节给出）
+### 行为 1：按 id 查用户
 
 | 用例名 | 输入 | 期望 |
 |---|---|---|
 | 存在的用户 | 先 POST `{"id":1,"name":"Tom","age":20}`，再 `GET /users/1` | ① 状态码 200<br>② `Content-Type` 是 `application/json`<br>③ body 能解出 `User{ID:1, Name:"Tom", Age:20}` |
 | 不存在的用户 | `GET /users/99` | 状态码 404 |
 
-**这一步用到的知识点：**
+先在 `server_test.go` 里写测试（含布置助手 `postUser`、测试 `TestGetUser`），编译失败
+（`undefined: NewServer`）即 RED；再建 `server.go`，照契约写出让测试通过的**最少代码**
+变绿。实现提示：`http.NewServeMux`、`mux.HandleFunc("GET /users/{id}", h)`、
+`r.PathValue("id")` 配 `strconv.Atoi`、`json.NewEncoder(w).Encode(u)`。注意：POST 此刻
+只是 arrange 工具，存进 map 即可，它的状态码对不对还没有人管——行为 2 会来收拾它。
+
+```bash
+go test ./tdd/http -run TestGetUser -v
+```
+
+### 行为 2：POST 创建用户，且创建后真的能查到
+
+| 用例名 | 输入 | 期望 |
+|---|---|---|
+| 合法 JSON 创建成功 | POST /users，body `{"id":2,"name":"Jerry","age":18}` | ① 状态码 201<br>② 随后 GET /users/2 → 200 且解出 `User{2, "Jerry", 18}`（同一个 server，数据真的存下了） |
+| 请求体是非法 JSON | POST /users，body `{"id":` | 状态码 400 |
+| 请求体为空（可选） | POST /users，body 传 nil | 状态码 400（Decode 返回 `io.EOF`，同样是 error） |
+
+先写测试跑红——这次代码已经能编译，红会红在断言上（期望 201，得到的是旧实现的隐式
+200）；再改实现变绿。本行为的测试名自定。
+
+```bash
+go test ./tdd/http -v
+```
+
+### 行为 3：没实现的方法返回 405
+
+| 用例名 | 输入 | 期望 |
+|---|---|---|
+| DELETE 用户 | `DELETE /users/1` | 状态码 405；可选：响应头 `Allow` 包含 `GET` |
+| PUT 用户（可选） | `PUT /users/1` | 状态码 405 |
+
+先写测试再跑：只要行为 1 按契约用了 method+pattern 路由，这个测试可能一写就是绿的——
+绿了就当它锁定行为、防回归；没绿就把路由改成 `"GET /users/{id}"` 形式再跑。测试名自定。
+
+```bash
+go test ./tdd/http -v
+```
+
+### 行为 4：集成级对照——httptest.NewServer 起真实服务
+
+| 用例名 | 操作 | 期望 |
+|---|---|---|
+| 真实端口全流程 | `httptest.NewServer(NewServer())` 起服务；`http.Post` 创建 id=3 的用户；再 `http.Get(ts.URL + "/users/3")` | POST 返回 201；GET 返回 200 且 body 解出该用户 |
+
+在 `integration_test.go` 里自己写完整测试 `TestIntegration`：起真实服务、发真实请求、
+按用例表断言；别忘了 `defer ts.Close()` 和关闭 `resp.Body`。
+
+```bash
+go test ./tdd/http -run TestIntegration -race -v
+```
+
+### 行为 5：每个请求打一行 slog 结构化日志
+
+| 用例名 | 操作 | 期望 |
+|---|---|---|
+| 正常请求被记录 | 把默认 logger 换成写 `bytes.Buffer` 的 TextHandler，GET /users/1 | 日志一行，含 `method=GET`、`path=/users/1`、`status=200` |
+| 404 也被记录 | GET /users/99 | 日志含 `status=404`（中间件看到的是真实状态码） |
+
+在 `server_test.go` 里自己写完整测试 `TestRequestLog`：把默认 logger 换成写
+`bytes.Buffer` 的 TextHandler，发请求，用 `strings.Contains` 断言日志内容；断言完
+别忘了恢复全局 logger。实现写在 `logging.go`。
+
+```bash
+go test ./tdd/http -run TestRequestLog -v
+```
+
+---
+
+## 三、知识点总结
+
+### 行为 1：按 id 查用户
 
 1. **`http.Handler`：一个方法的接口撑起整个 net/http**。签名就是
    `ServeHTTP(w http.ResponseWriter, r *http.Request)`，你的服务、路由器、中间件全是它。
@@ -186,14 +248,6 @@ func TestGetUser(t *testing.T) {
 
 ### 行为 2：POST 创建用户，且创建后真的能查到
 
-| 用例名 | 输入 | 期望 |
-|---|---|---|
-| 合法 JSON 创建成功 | POST /users，body `{"id":2,"name":"Jerry","age":18}` | ① 状态码 201<br>② 随后 GET /users/2 → 200 且解出 `User{2, "Jerry", 18}`（同一个 server，数据真的存下了） |
-| 请求体是非法 JSON | POST /users，body `{"id":` | 状态码 400 |
-| 请求体为空（可选） | POST /users，body 传 nil | 状态码 400（Decode 返回 `io.EOF`，同样是 error） |
-
-**这一步用到的知识点：**
-
 1. **这次的 RED 是断言失败，不是编译失败**：行为 1 的最小实现里 POST 的状态码没人约束过
    （多半是隐式 200），新测试一跑，期望 201 得到 200——红。回忆
    [tdd/testbasic](../testbasic/README.md) 行为 1：测试失败有两种形态，现在两种你都见过了。
@@ -214,13 +268,6 @@ func TestGetUser(t *testing.T) {
 
 ### 行为 3：没实现的方法返回 405
 
-| 用例名 | 输入 | 期望 |
-|---|---|---|
-| DELETE 用户 | `DELETE /users/1` | 状态码 405；可选：响应头 `Allow` 包含 `GET` |
-| PUT 用户（可选） | `PUT /users/1` | 状态码 405 |
-
-**这一步用到的知识点：**
-
 1. **这个测试可能一写就是绿的**——只要行为 1 按契约用了 method+pattern 路由，ServeMux
    在"路径匹配、方法不匹配"时会自动回 405 并带上 `Allow: GET` 响应头。一行实现没写测试
    就过了，RED 去哪了？这是本练习的重要一课：**测试的另一个角色是锁定行为、防回归**——
@@ -233,22 +280,6 @@ func TestGetUser(t *testing.T) {
 
 ### 行为 4：集成级对照——httptest.NewServer 起真实服务
 
-| 用例名 | 操作 | 期望 |
-|---|---|---|
-| 真实端口全流程 | `httptest.NewServer(NewServer())` 起服务；`http.Post` 创建 id=3 的用户；再 `http.Get(ts.URL + "/users/3")` | POST 返回 201；GET 返回 200 且 body 解出该用户 |
-
-测试骨架（在 `integration_test.go` 里补齐）：
-
-```go
-func TestIntegration(t *testing.T) {
-	ts := httptest.NewServer(NewServer())
-	defer ts.Close()
-	// 用 http.Post / http.Get 对 ts.URL 发真实请求，断言同用例表
-}
-```
-
-**这一步用到的知识点：**
-
 1. **Recorder 与 NewServer 是两种测试层级**：行为 1~3 是**单元级**——`ServeHTTP` 是进程内
    函数调用，没有网络、没有端口、没有并发；本行为是**集成级**——`httptest.NewServer` 真的在
    `127.0.0.1` 的随机端口监听，请求真的走 TCP + HTTP 协议栈，服务器真的一个请求一个
@@ -259,55 +290,48 @@ func TestIntegration(t *testing.T) {
    （比如忘了加锁）。工程实践是金字塔：大量单元级 + 少量集成级冒烟。
 3. **三个使用细节**：`ts.URL` 是形如 `http://127.0.0.1:52341` 的基地址；`defer ts.Close()`
    释放端口；客户端侧 `resp.Body` 必须 `defer resp.Body.Close()`——HTTP 客户端的连接复用
-   依赖 body 被读完并关闭，忘关是真实服务里最常见的资源泄漏之一。
+   依赖 body 被读完并关闭，忘关是真实服务里最常见的资源泄漏之一。起服务的标准写法：
+
+   ```go
+   ts := httptest.NewServer(NewServer())
+   defer ts.Close()
+   // 之后用 http.Post / http.Get 对 ts.URL 发真实请求
+   ```
 4. **`-race` 在这里才真正上岗**：单元级测试是单 goroutine 顺序调用，忘了给 map 加锁也不会
    暴露；集成级是真并发服务器，请求交错执行，数据竞争立刻现形。可选加分：用
    `sync.WaitGroup` 并发发 50 个 POST 再跑 `-race`，亲眼见锁的价值。
 
 ### 行为 5：每个请求打一行 slog 结构化日志
 
-| 用例名 | 操作 | 期望 |
-|---|---|---|
-| 正常请求被记录 | 把默认 logger 换成写 `bytes.Buffer` 的 TextHandler，GET /users/1 | 日志一行，含 `method=GET`、`path=/users/1`、`status=200` |
-| 404 也被记录 | GET /users/99 | 日志含 `status=404`（中间件看到的是真实状态码） |
-
-测试骨架（在 `server_test.go` 里补齐）：
-
-```go
-func TestRequestLog(t *testing.T) {
-	var buf bytes.Buffer
-	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(old) })
-	// 发请求，然后用 strings.Contains(buf.String(), "method=GET") 等断言
-}
-```
-
-**这一步用到的知识点：**
-
 1. **slog 是结构化日志**：`slog.Info("request", "method", r.Method, "path", r.URL.Path,
    "status", status)`——一条消息 + 若干键值对。对比 `fmt.Printf` 的纯文本：键值对能被日志
    系统直接索引，"查所有 status=500 的请求"是一次过滤而不是写正则。TextHandler 输出 `k=v`
    适合开发；`slog.NewJSONHandler` 输出 JSON 适合生产采集。
 2. **中间件模式：`func(http.Handler) http.Handler`**。日志、鉴权、限流这类"每个请求都要做"
-   的横切逻辑，都写成包一层 Handler 的函数：进去前记时间、调内层、出来后记状态。这是
+   的横切逻辑，都写成包一层 Handler 的函数（本练习里就是契约中的 `loggingMiddleware`）：
+   进去前记时间、调内层、出来后记状态。这是
    Handler 接口组合性的体现，也是 Go Web 生态的标准扩展点（对照
    [basic/func_type.go](../../basic/func_type.go) 的函数作参数与返回值）。
 3. **捕获状态码要包装 ResponseWriter**：`http.ResponseWriter` 接口只有写的方法，没有
-   "读出刚才的状态码"。标准手法是自定义 struct **嵌入** `http.ResponseWriter`、重写
+   "读出刚才的状态码"。标准手法是自定义 struct（契约中的 `statusRecorder`）**嵌入**
+   `http.ResponseWriter`、重写
    `WriteHeader` 记下 code 再透传；默认状态记 200（handler 只写 body 不调 WriteHeader 时
    就是 200）。嵌入 + 方法重写正是 [basic/struct_more.go](../../basic/struct_more.go) 的手法。
 4. **`slog.SetDefault` 改的是全局状态**：测试里换成写 buffer 的 logger 才能断言输出。两条
    纪律：用 `t.Cleanup` 恢复原 logger；这个测试**不能加 `t.Parallel()`**（全局替换会互相踩）。
    生产代码更干净的做法是把 `*slog.Logger` 注入依赖它的组件——本练习为了不破坏
-   `NewServer()` 的固定契约选择了全局替换，体会这两种取舍。
+   `NewServer()` 的固定契约选择了全局替换，体会这两种取舍。测试里替换 logger 的标准写法：
+
+   ```go
+   var buf bytes.Buffer
+   old := slog.Default()
+   slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+   t.Cleanup(func() { slog.SetDefault(old) })
+   // 发请求，然后用 strings.Contains(buf.String(), "method=GET") 等断言
+   ```
 5. **Go 1.26 的 `slog.NewMultiHandler`**：一个 Handler 扇出到多个 Handler——文本打到
    stdout 给人看、JSON 同时写文件给采集系统，一次日志两路输出，不必自己写包装。知道有它
    即可，本练习用不上。
-
----
-
-## 三、知识点总结
 
 ### Handler 体系速查
 
