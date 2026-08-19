@@ -5,8 +5,7 @@
 | 目录 | 定位 | 运行方式 |
 |---|---|---|
 | `basic/` | 语法知识点实验区（每文件独立 `package main` + `func main`） | 单文件执行：`go run basic/xxx.go` |
-| `testing/` | `testing` 标准库工具学习（单测/表驱动/Benchmark/Fuzz/Coverage） | `go test ./testing/...` |
-| `tdd/` | TDD 行为驱动练习（RED → GREEN → REFACTOR） | `go test ./tdd/xxx` |
+| `tdd/` | `testing` 标准库工具与 TDD 行为驱动练习（单测/表驱动/Benchmark/Fuzz/Coverage） | `go test ./tdd/xxx` |
 | `docs/` | 书单与易错点笔记 | — |
 
 > 注意：`basic/` 所有文件同属 `package main` 且各有 `func main`，因此**不能** `go build ./basic/`，只能逐文件 `go run`。这是实验区的刻意取舍，不是错误。
@@ -162,7 +161,7 @@
 
 ### 遗漏清单（按优先级）
 
-- **P0（阻塞 TDD，立即补）**：`testing` 包全流程（TestXxx / 表驱动 / t.Run / Benchmark / Example）；error 体系（`errors.New`、`fmt.Errorf`+`%w`、自定义错误、`errors.Is/As`）
+- **P0（已建立，需按目录逐题验收）**：`testing` 包全流程（TestXxx / 表驱动 / t.Run / Benchmark / Example）；error 体系（`errors.New`、`fmt.Errorf`+`%w`、自定义错误、`errors.Is/As`）
 - **P1（一个月内补）**：context 包；Sync.Map；逃逸分析；slice 两个经典陷阱补充实验
 - **P2（随 TDD 练习自然覆盖）**：HTTP/`net/http`/`httptest`（tdd/http）；JSON 已会
 - **P3（进阶，缓学）**：Grpc/Protobuf、Etcd、TiDB、GC 与调度原理、uber 规范逐条过
@@ -184,8 +183,9 @@
 ### 目录划分结论：**合理，保持现状**
 
 - `basic/` 保留为语法实验区（单文件 `go run`），**不要**为了 TDD 重写它——语法演示改成可测包是过度设计
-- `testing/` 学测试工具本身，`tdd/` 做行为驱动练习，职责分离清晰
+- `tdd/` 同时承载 `testing` 标准库工具学习与行为驱动练习；仓库当前没有独立的 `testing/` 目录
 - 2026-08 起 `tdd/` 已清空重建：练习按统一模板（需求规格 + 接口契约 + 用例表格 + 知识点映射）逐个创建，见下文路线
+- 模板分两档：阶段 0（testbasic / errhandling / fuzzlab）带「手把手起步」与内联知识点；自阶段 1 起任务单不再给完整测试代码（只有行为目标 + 用例表 + 验收命令），知识点集中到第三节「知识点总结」，与任务单分离
 
 ### TDD 练习总目录（覆盖教程全部章节 + 现代工具链）
 
@@ -241,9 +241,9 @@
 | 16 | 🔺[tdd/sortbench](tdd/sortbench/README.md) | 机制 | 插入 / 归并 / 快排 / 堆排序的 TDD 实现、Benchmark 对比（可用 `b.Loop`）、`b.StopTimer/StartTimer`、顺带验证 uber 性能条（指定容量、strconv vs fmt） | slice_sort | 教程 ch16 后半；uber·性能章 | ✅ 已建 |
 
 > 全部 16 个练习任务单已创建完毕（含 3 个 basic/ 观察实验程序）。已在 basic 掌握的知识点（反射、文件、time 等）不单独设练习，会在后续练习中自然复用。
-> 现代工具链落点汇总：`b.Loop`→练习 1/16；`errors.AsType`→练习 2；`testing/synctest`→练习 7/12；`WaitGroup.Go`→练习 10；`slices`/`maps`/`cmp`、range-over-func→练习 9；`log/slog`（Go 1.21 结构化日志，Go 1.26 增 `MultiHandler`）→ 随练习 14 顺带使用。
+> 现代工具链落点汇总：`b.Loop`→练习 1/16；`errors.AsType`→练习 2；`testing/synctest`→练习 7/12；`WaitGroup.Go`→练习 10；`slices`/`maps`/`cmp`、range-over-func→练习 9；`log/slog`（Go 1.21 结构化日志，Go 1.26 增 `MultiHandler`）→ 随练习 14 顺带使用。表格中的“✅ 已建”表示任务单/目录已建立，不代表学习者已经完成实现或验收。
 
-**教程章节覆盖核对**：ch01~07、ch11、ch19 已由 basic 覆盖，由巩固练习承载；ch08→练习 14/15、ch09→练习 10/11、ch10→练习 11+观察实验、ch13/16/17/18/20、spec·02/03 均有练习或实验落点；ch12/14/15 缓学（见文末）。learn-go-with-tests 的 "Build an application" 篇（HTTP server 迭代 / JSON 路由 / IO 持久化 / 命令行结构 / WebSockets / 验收测试）属项目实战，建议完成阶段 5 后整本跟做。
+**教程章节覆盖核对**：ch01~07、ch11、ch19 已由 basic 覆盖，由巩固练习承载；ch08→练习 14/15、ch09→练习 10/11、ch10→练习 11+观察实验、ch13/16/17/18/20、spec·02/03 均有练习或实验落点；“有落点”不等于“已完成验证”，需要以对应目录的实际源码和测试结果为准；ch12/14/15 缓学（见文末）。learn-go-with-tests 的 "Build an application" 篇（HTTP server 迭代 / JSON 路由 / IO 持久化 / 命令行结构 / WebSockets / 验收测试）属项目实战，当前仍未覆盖。
 
 **不适合 TDD 的部分（配套安排）**
 
