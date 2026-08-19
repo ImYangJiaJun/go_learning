@@ -113,13 +113,17 @@ func TestRepeat(t *testing.T) {
 3. **`-run` 过滤**：参数是正则表达式；用斜杠路径定位子测试，如 `-run 'TestRepeat/零次得空串'`。注意：子测试名里的空格会被替换成下划线（"重复 三次" 会变成 `重复_三次`），过滤时要用替换后的名字。
 4. **本步的循环是 RED → GREEN → REFACTOR 里的 REFACTOR**：重构对象是测试代码本身，全程测试保持绿——体会"有测试保护，才敢重构"。
 
-### 行为 3：基准测试
+### 行为 3：基准测试与 Example
 
 在 `repeat_test.go` 里加 `BenchmarkRepeat`，跑：
 
 ```bash
 go test ./tdd/testbasic -bench=. -benchmem
 ```
+
+同时补充一个可执行文档示例 `ExampleRepeat`：它必须打印 `aaa`，并使用 `// Output:`
+作为验收标准。普通 `go test` 会执行带 `// Output:` 的 Example；没有该注释的 Example
+只参与编译，不会比较输出。
 
 **这一步用到的知识点：**
 
@@ -187,7 +191,7 @@ go tool cover -html=cover.out   # 浏览器打开，红色 = 未覆盖
 | | `TestXxx(t *testing.T)` | `BenchmarkXxx(b *testing.B)` | `ExampleXxx()` |
 |---|---|---|---|
 | 用途 | 正确性断言 | 性能测量 | 可执行的文档示例 |
-| `go test` 默认执行？ | ✅ 执行 | ❌ 必须加 `-bench` | ✅ 编译并执行 |
+| `go test` 默认执行？ | ✅ 执行 | ❌ 必须加 `-bench` | 有 `// Output:` 时执行；否则只编译 |
 | 怎么判断成败 | 代码里调 `t.Error`/`t.Fatal` | 不判成败，输出耗时数据 | 比较实际 stdout 和 `// Output:` 注释 |
 | 本练习出现在 | 行为 1、2、4 | 行为 3 | 未含（见下） |
 
@@ -200,7 +204,7 @@ func ExampleRepeat() {
 }
 ```
 
-有 `// Output:` 注释才会被当作测试执行并比对输出；没有则只参与编译。可作为本练习的扩展项。
+有 `// Output:` 注释才会被当作测试执行并比对输出；没有则只参与编译。本练习要求完成带输出注释的版本。
 
 ### 命名与文件约定速查
 
@@ -241,6 +245,7 @@ go test ./tdd/testbasic -v                      # 全绿
 go vet ./tdd/testbasic                          # 无警告
 go test ./tdd/testbasic -cover                  # 本练习逻辑简单，必须 100%
 go test ./tdd/testbasic -bench=. -benchmem      # 能跑出基准数据
+go test ./tdd/testbasic -run ExampleRepeat       # 执行文档示例
 ```
 
 ## 五、完成后自查（能口头回答才算过）
