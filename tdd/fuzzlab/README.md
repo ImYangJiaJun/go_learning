@@ -13,30 +13,56 @@
 
 ## 一、需求规格
 
-### 这个包要做什么
-
-**没有 `main` 函数。** 本练习的产出物不是可执行程序，而是一个被测试验证的包——
-`go test ./tdd/fuzzlab` 就是它的运行方式，验收者是测试，不是人。
+### 核心功能
 
 这个包对外只提供一个能力：
 
 - **把阿拉伯数字 `n` 转成罗马数字字符串**；合法范围 **1~3999**，越界返回哨兵错误 `ErrOutOfRange`
 
-### 文件计划（共 3 个文件 + 1 个可能自动出现的目录）
+**没有 `main` 函数。** 本练习的产出物不是可执行程序，而是一个被测试验证的包——
+`go test ./tdd/fuzzlab` 就是它的运行方式，验收者是测试，不是人。
 
-| 文件 | 里面写什么 | 什么时候建 |
-|---|---|---|
-| `roman_test.go` | 行为 1 的表驱动测试 + 行为 2 的性质测试 | **第 1 个建** |
-| `roman.go` | `ArabicToRoman` 函数与 `ErrOutOfRange` | 测试编译报错时 |
-| `fuzz_test.go` | 行为 3 的 `FuzzArabicToRoman` | 行为 1、2 全绿之后 |
-| `testdata/fuzz/FuzzArabicToRoman/…` | 崩溃语料，**由 fuzz 引擎自动写入，人不手写** | 仅当 fuzz 撞出崩溃时 |
+### 调用关系（谁在调用谁）
+
+```text
+测试代码 ──► ArabicToRoman(n)                         行为 1（表驱动）、行为 2（性质测试）
+fuzz 引擎 ──► FuzzArabicToRoman ──► ArabicToRoman(n)  行为 3（模糊测试）
+```
+
+这个包没有接口也没有依赖注入：调用方只有测试代码和 fuzz 引擎。行为 3 的特殊之处
+在第二行——**替你调用被测函数的是引擎**，输入由它变异生成，你只在 `f.Fuzz` 回调里写断言。
+
+### 文件计划（共 3 个文件 + 1 个可能自动出现的目录，按编号顺序建）
+
+最终目录长这样（`testdata/` 仅当 fuzz 撞出崩溃时才由引擎创建，可能始终不出现）：
+
+```text
+tdd/fuzzlab/
+├── roman_test.go    # 行为 1 的表驱动测试 + 行为 2 的性质测试
+├── roman.go         # 实现：转换函数 + 哨兵错误
+├── fuzz_test.go     # 行为 3 的模糊测试
+└── testdata/fuzz/FuzzArabicToRoman/…   # 崩溃语料，引擎自动写入，人不手写
+```
+
+| # | 文件 | 这个文件是干什么的 | 里面要写的符号 | 什么时候建 |
+|---|---|---|---|---|
+| 1 | `roman_test.go` | 行为 1 的表驱动测试和行为 2 的性质测试 | `TestArabicToRoman`、`TestArabicToRomanProperties` | **第 1 个建** |
+| 2 | `roman.go` | 转换函数与越界哨兵错误 | `ArabicToRoman`、`ErrOutOfRange` | 测试编译报错时 |
+| 3 | `fuzz_test.go` | 行为 3 的模糊测试 | `FuzzArabicToRoman` | 行为 1、2 全绿之后 |
+| — | `testdata/fuzz/FuzzArabicToRoman/…` | 崩溃语料，**由 fuzz 引擎自动写入，人不手写** | 无（语料文件由引擎生成） | 仅当 fuzz 撞出崩溃时 |
+
+对外要写的符号一共 2 个——1 个函数加 1 个哨兵错误，就是下面契约里的全部，一个不多一个不少。
 
 ### 接口契约（固定，按此实现，名字不要改）
 
+完备性原则：**测试代码直接用到的每一个符号都在下面**——本练习只有一个实现文件，
+契约就是这一组。你唯一需要自己实现的是函数体和它内部的算法数据
+（如行为 1 给出的面值表）；如果写代码时发现要发明契约之外的对外符号，说明走偏了。
+
+**写在 `roman.go`：**（需要 `import "errors"`）
+
 ```go
 package fuzzlab
-
-import "errors"
 
 // ErrOutOfRange 是越界哨兵错误：n 不在 [1, 3999] 时由 ArabicToRoman 返回。
 // 哨兵错误必须声明为包级变量，调用方用 errors.Is 识别，禁止比较错误文案。
@@ -46,6 +72,12 @@ var ErrOutOfRange = errors.New("number out of range")
 // n 越界（< 1 或 > 3999）时返回空串和 ErrOutOfRange；合法时 err 为 nil。
 func ArabicToRoman(n int) (string, error)
 ```
+
+**契约核对清单**（写完代码后数一遍，应一个不少）：
+
+- 0 个类型：本契约不定义类型，输入输出都是内置类型
+- 1 个函数：`ArabicToRoman`
+- 1 个哨兵错误：`ErrOutOfRange`
 
 ### 第一步：手把手起步（RED → GREEN）
 
